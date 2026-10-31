@@ -62,25 +62,28 @@ def investigate_discrepancy(
     """Look for a transaction that could explain a loan balance discrepancy.
 
     This only reports correlation (a payment of the right size, recorded in
-    the system expected to already reflect it) as a `possible_explanation`.
-    It never returns a `confirmed` finding: a matching amount and an earlier
-    system-update timestamp do not prove that a specific payment was posted
-    to one balance and omitted from the other.
+    the system with the lower balance) as a `possible_explanation`. It never
+    returns a `confirmed` finding: a matching amount does not prove that a
+    specific payment was posted to one balance and omitted from the other.
+
+    `related_system_updates` is returned as contextual evidence for the
+    analyst to read; it is not used to decide the finding below.
     """
     difference = amount_a - amount_b
 
     if difference == 0:
         raise ValueError("no discrepancy to investigate: amounts are equal")
 
-    # The system with the lower balance is the one expected to already
-    # reflect a reducing transaction (e.g. a payment) that the other system
-    # has not picked up yet.
-    lagging_system = system_b if difference > 0 else system_a
+    # The system with the lower balance is the one that would already show
+    # a reducing transaction (e.g. a payment) that the other system has not
+    # picked up yet. This is about which balance is lower right now, not
+    # about which system is slower or "behind" in general.
+    lower_balance_system = system_b if difference > 0 else system_a
 
     supporting_transactions = [
         t
         for t in get_transactions(loan_id)
-        if t["system"] == lagging_system
+        if t["system"] == lower_balance_system
         and t["type"] == "payment"
         and t["amount"] == abs(difference)
     ]
@@ -89,15 +92,15 @@ def investigate_discrepancy(
     if supporting_transactions:
         finding = "possible_explanation"
         explanation = (
-            f"{lagging_system} recorded a payment of {abs(difference)} that "
-            f"matches the discrepancy amount, which may mean it was posted "
-            f"there but not yet reflected in the other system. This is a "
-            f"correlation, not confirmed proof of cause."
+            f"{lower_balance_system} recorded a payment of {abs(difference)} "
+            f"that matches the discrepancy amount, which may mean it was "
+            f"posted there but not yet reflected in the other system. This "
+            f"is a correlation, not confirmed proof of cause."
         )
     else:
         finding = "insufficient_evidence"
         explanation = (
-            f"No payment transaction for {loan_id} in {lagging_system} "
+            f"No payment transaction for {loan_id} in {lower_balance_system} "
             f"matches the discrepancy amount of {abs(difference)}."
         )
 
