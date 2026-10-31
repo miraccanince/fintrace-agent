@@ -3,3 +3,4 @@ __pycache__/
 .DS_Store
 FINANCIAL_DATA_RELIABILITY_ROADMAP.md
 CLAUDE.md
+.env

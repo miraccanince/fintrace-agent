@@ -1,9 +1,12 @@
 import os
 
+from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 
 from llm_investigation import InvalidLLMFinding, LLMInvestigationFinding
+
+load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
 
 MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
 
