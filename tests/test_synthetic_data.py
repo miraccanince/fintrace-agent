@@ -63,8 +63,8 @@ def test_default_dataset_has_expected_size(raw):
     count = lambda sql: raw.execute(sql).fetchone()[0]
 
     assert count("SELECT COUNT(*) FROM loans") == 15
-    assert count("SELECT COUNT(*) FROM batch_runs") == 10  # 5 days x 2 systems
-    assert count("SELECT COUNT(*) FROM balance_snapshots") == 150  # 15 loans x 2 systems x 5 days
+    assert count("SELECT COUNT(*) FROM batch_runs") == 12  # 6 days x 2 systems
+    assert count("SELECT COUNT(*) FROM balance_snapshots") == 180  # 15 loans x 2 systems x 6 days
     assert count("SELECT COUNT(*) FROM transactions") > 15
 
 
@@ -73,7 +73,7 @@ def test_loan_count_is_configurable(tmp_path):
     connection = sqlite3.connect(tmp_path / "small.db")
 
     assert connection.execute("SELECT COUNT(*) FROM loans").fetchone()[0] == 4
-    assert connection.execute("SELECT COUNT(*) FROM balance_snapshots").fetchone()[0] == 40
+    assert connection.execute("SELECT COUNT(*) FROM balance_snapshots").fetchone()[0] == 48
     connection.close()
 
 
@@ -134,7 +134,7 @@ def test_no_ground_truth_or_extra_tables_in_the_database(raw):
 def test_every_snapshot_equals_an_independent_recalculation(raw):
     snapshots = raw.execute("SELECT loan_id, system, as_of_date, outstanding_amount FROM balance_snapshots").fetchall()
 
-    assert len(snapshots) == 150
+    assert len(snapshots) == 180
     for loan_id, system, as_of, stored in snapshots:
         assert Decimal(stored) == _independent_balance(raw, loan_id, system, as_of)
 
@@ -165,7 +165,7 @@ def test_most_loans_have_balance_changing_activity_inside_the_snapshot_window(tm
     dates = connection.execute("SELECT COUNT(DISTINCT as_of_date) FROM balance_snapshots").fetchone()[0]
     connection.close()
 
-    assert dates == 5
+    assert dates == 6
     assert len(active) >= 8
     assert moving == active
 
