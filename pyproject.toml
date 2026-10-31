@@ -20,6 +20,9 @@ dev = ["pytest>=9.0", "httpx>=0.28"]
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+fintrace = ["static/*.html"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 # evals/ holds scripts, not a package; tests import eval_cases and run_eval from it.

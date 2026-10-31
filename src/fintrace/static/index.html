@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FinTrace — Investigate a loan</title>
+<style>
+  :root {
+    --navy: #0f2a4a;
+    --blue: #2563eb;
+    --blue-light: #eaf1fd;
+    --ink: #1a2433;
+    --muted: #5b6b82;
+    --border: #d9e2ef;
+    --bg: #f6f8fb;
+    --card: #ffffff;
+    --danger: #b3261e;
+    --danger-bg: #fdecea;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--ink);
+    display: flex;
+    justify-content: center;
+    padding: 48px 16px;
+  }
+  main { width: 100%; max-width: 560px; }
+  h1 { font-size: 1.4rem; color: var(--navy); margin: 0 0 4px; }
+  p.subtitle { color: var(--muted); margin: 0 0 28px; font-size: 0.92rem; }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px;
+    box-shadow: 0 1px 2px rgba(15, 42, 74, 0.04);
+  }
+  .row { display: flex; gap: 10px; }
+  input[type="text"] {
+    flex: 1;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-size: 0.95rem;
+    color: var(--ink);
+  }
+  input[type="text"]:focus { outline: 2px solid var(--blue); outline-offset: 1px; }
+  button {
+    padding: 10px 18px;
+    border: none;
+    border-radius: 8px;
+    background: var(--blue);
+    color: white;
+    font-size: 0.95rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  button:disabled { background: #93b4ef; cursor: default; }
+  #status { margin-top: 20px; font-size: 0.9rem; color: var(--muted); }
+  #status.error { color: var(--danger); }
+  .result { margin-top: 20px; }
+  .badge {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 999px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    background: var(--blue-light);
+    color: var(--navy);
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+  }
+  .badge.discrepancy { background: var(--danger-bg); color: var(--danger); }
+  .difference { font-size: 1.8rem; font-weight: 700; color: var(--navy); margin: 10px 0 4px; }
+  .note { font-size: 0.82rem; color: var(--muted); margin-bottom: 16px; }
+  table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 0.88rem; }
+  th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 600; font-size: 0.78rem; text-transform: uppercase; }
+  .pill { font-size: 0.72rem; padding: 1px 6px; border-radius: 6px; background: var(--danger-bg); color: var(--danger); }
+</style>
+</head>
+<body>
+<main>
+  <h1>FinTrace</h1>
+  <p class="subtitle">Compare a loan's latest balance snapshots across systems.</p>
+  <div class="card">
+    <div class="row">
+      <input id="loan-id" type="text" placeholder="Loan ID, e.g. LN-5001" autocomplete="off">
+      <button id="investigate">Compare Balances</button>
+    </div>
+    <div id="status"></div>
+    <div id="result" class="result" hidden></div>
+  </div>
+</main>
+<script>
+  const loanInput = document.getElementById("loan-id");
+  const button = document.getElementById("investigate");
+  const statusEl = document.getElementById("status");
+  const resultEl = document.getElementById("result");
+
+  function setStatus(text, isError) {
+    statusEl.textContent = text || "";
+    statusEl.className = isError ? "error" : "";
+  }
+
+  // Display-only formatting of the amounts the backend already computed;
+  // it never recomputes or rounds the underlying value.
+  function formatMoney(amount, currency) {
+    if (amount === null || amount === undefined) return "—";
+    const symbol = { EUR: "€", USD: "$" }[currency] || (currency ? currency + " " : "");
+    const number = Number(amount);
+    const formatted = Number.isNaN(number)
+      ? amount
+      : number.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return `${symbol}${formatted}`;
+  }
+
+  function snapshotRow(label, snapshot) {
+    if (!snapshot) return `<tr><td>${label}</td><td colspan="2">no snapshot</td></tr>`;
+    return `<tr><td>${label}</td><td>${formatMoney(snapshot.amount, snapshot.currency)}</td><td>${snapshot.as_of_date}</td></tr>`;
+  }
+
+  async function investigate() {
+    const loanId = loanInput.value.trim();
+    if (!loanId) { setStatus("Enter a loan ID.", true); return; }
+
+    resultEl.hidden = true;
+    button.disabled = true;
+    setStatus("Comparing…", false);
+
+    try {
+      const response = await fetch(`/api/loans/${encodeURIComponent(loanId)}/comparison`);
+      if (!response.ok) {
+        setStatus(`Request failed (HTTP ${response.status}).`, true);
+        return;
+      }
+      const data = await response.json();
+
+      if (!data.found) {
+        setStatus(`Loan "${loanId}" was not found.`, false);
+        return;
+      }
+
+      setStatus("", false);
+      const isDiscrepancy = data.status === "discrepancy";
+      resultEl.innerHTML = `
+        <span class="badge ${isDiscrepancy ? "discrepancy" : ""}">${data.status.replace("_", " ")}</span>
+        <div class="difference">${data.difference === null ? "—" : formatMoney(data.difference, data.loan_system ? data.loan_system.currency : (data.risk_system ? data.risk_system.currency : null))}</div>
+        ${data.lower_balance_system ? `<div class="note">Lower balance: ${data.lower_balance_system.replace("_", " ")}</div>` : ""}
+        <div class="note">Difference: loan_system minus risk_system. Each tool call is read-only; no financial record is changed.</div>
+        <table>
+          <thead><tr><th>System</th><th>Amount</th><th>As of</th></tr></thead>
+          <tbody>
+            ${snapshotRow("loan_system", data.loan_system)}
+            ${snapshotRow("risk_system", data.risk_system)}
+          </tbody>
+        </table>
+        ${data.snapshot_dates_aligned === false ? '<p class="note"><span class="pill">dates not aligned</span> the two snapshots are from different dates.</p>' : ""}
+      `;
+      resultEl.hidden = false;
+    } catch (error) {
+      setStatus("Could not reach the server.", true);
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  button.addEventListener("click", investigate);
+  loanInput.addEventListener("keydown", (event) => { if (event.key === "Enter") investigate(); });
+</script>
+</body>
+</html>
