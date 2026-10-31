@@ -3,7 +3,7 @@ from typing import Callable, Literal
 
 from pydantic import BaseModel
 
-from investigation import get_system_updates, get_transactions, investigate_discrepancy
+from fintrace.investigation import get_system_updates, get_transactions, investigate_discrepancy
 
 
 class InvalidLLMFinding(ValueError):

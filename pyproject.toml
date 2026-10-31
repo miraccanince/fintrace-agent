@@ -17,5 +17,10 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=9.0", "httpx>=0.28"]
 
-[tool.setuptools]
-py-modules = ["main", "api", "investigation", "llm_investigation", "gemini_adapter"]
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# evals/ holds scripts, not a package; tests import eval_cases and run_eval from it.
+pythonpath = ["evals"]

@@ -15,7 +15,7 @@ retrieved record may be cited as context.
 
 from decimal import Decimal
 
-import investigation
+from fintrace import investigation
 
 REGRESSION_TRANSACTIONS = [
     # Case 1: correct system, correct type, correct amount - clean match.

@@ -4,9 +4,9 @@ from typing import Any
 from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel
 
-from gemini_adapter import generate_finding as gemini_generate_finding
-from llm_investigation import InvalidLLMFinding, generate_llm_finding
-from main import compare_datasets, parse_amount
+from fintrace.gemini_adapter import generate_finding as gemini_generate_finding
+from fintrace.llm_investigation import InvalidLLMFinding, generate_llm_finding
+from fintrace.compare import compare_datasets, parse_amount
 
 app = FastAPI()
 

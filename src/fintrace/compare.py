@@ -2,7 +2,8 @@ import csv
 import os
 from decimal import Decimal, InvalidOperation
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# CSV fixtures live in data/ at the repository root, two levels above this package.
+DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "data")
 
 
 def parse_amount(value):
@@ -163,8 +164,8 @@ def compare_datasets(system_a: list[dict], system_b: list[dict]) -> list[dict]:
 
 
 if __name__ == "__main__":
-    loan_system = load_loans_from_csv(os.path.join(BASE_DIR, "loan_system.csv"))
-    risk_system = load_loans_from_csv(os.path.join(BASE_DIR, "risk_system.csv"))
+    loan_system = load_loans_from_csv(os.path.join(DATA_DIR, "loan_system.csv"))
+    risk_system = load_loans_from_csv(os.path.join(DATA_DIR, "risk_system.csv"))
 
     for result in compare_datasets(loan_system, risk_system):
         print(result)

@@ -2,7 +2,7 @@ from decimal import Decimal
 
 import pytest
 
-from investigation import get_system_updates, get_transactions, investigate_discrepancy
+from fintrace.investigation import get_system_updates, get_transactions, investigate_discrepancy
 
 
 def test_get_transactions_filters_by_loan_id():

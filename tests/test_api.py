@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
-from api import app, get_llm_generate_finding
+from fintrace.api import app, get_llm_generate_finding
 
 client = TestClient(app)
 

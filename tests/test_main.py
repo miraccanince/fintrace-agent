@@ -1,9 +1,8 @@
 import subprocess
 import sys
 from decimal import Decimal
-from pathlib import Path
 
-from main import compare_datasets, load_loans_from_csv
+from fintrace.compare import compare_datasets, load_loans_from_csv
 
 
 def test_matching_records_report_zero_difference():
@@ -304,9 +303,8 @@ def test_whitespace_only_loan_id_is_reported_as_unidentified():
 
 
 def test_running_main_module_works_regardless_of_working_directory(tmp_path):
-    repo_root = Path(__file__).resolve().parent
     result = subprocess.run(
-        [sys.executable, str(repo_root / "main.py")],
+        [sys.executable, "-m", "fintrace.compare"],
         cwd=tmp_path,
         capture_output=True,
         text=True,

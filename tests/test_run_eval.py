@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
-import investigation
+from fintrace import investigation
 from eval_cases import HELD_OUT_CASES, REGRESSION_CASES, install_eval_fixtures
 from run_eval import classify_hypothesis, evaluate_case, rescore, run, summarize
 

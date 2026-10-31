@@ -3,8 +3,8 @@ from types import SimpleNamespace
 
 import pytest
 
-import investigation
-from llm_investigation import InvalidLLMFinding, generate_llm_finding
+from fintrace import investigation
+from fintrace.llm_investigation import InvalidLLMFinding, generate_llm_finding
 
 
 def _finding(**overrides):

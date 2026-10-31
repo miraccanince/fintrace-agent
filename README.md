@@ -29,16 +29,16 @@ pip install -e ".[dev]"
 
 ## Usage
 
-Run the CLI demo (reads `loan_system.csv` and `risk_system.csv` from the project root, regardless of your current working directory):
+Run the CLI demo (reads `data/loan_system.csv` and `data/risk_system.csv`, regardless of your current working directory):
 
 ```bash
-python main.py
+python -m fintrace.compare
 ```
 
 Run the API locally:
 
 ```bash
-uvicorn api:app --reload
+uvicorn fintrace.api:app --reload
 ```
 
 Then `POST /compare` with a JSON body:
@@ -52,7 +52,7 @@ Then `POST /compare` with a JSON body:
 
 ### LLM-assisted investigation (`/investigate`)
 
-For a loan with a discrepancy, `POST /investigate` asks an LLM to interpret the same synthetic transaction/system-update evidence a deterministic rule in `investigation.py` already looked at, and returns a structured, evidence-grounded finding:
+For a loan with a discrepancy, `POST /investigate` asks an LLM to interpret the same synthetic transaction/system-update evidence a deterministic rule in `src/fintrace/investigation.py` already looked at, and returns a structured, evidence-grounded finding:
 
 ```json
 {
@@ -77,7 +77,7 @@ Response:
 }
 ```
 
-Requires `GEMINI_API_KEY` in the environment (free tier; model defaults to `gemini-3.8-flash`, override with `GEMINI_MODEL`). The LLM call itself lives in `gemini_adapter.py`; `llm_investigation.py` only depends on a plain `Callable[[str], LLMInvestigationFinding]`, so swapping providers again means replacing that one adapter file. Guardrails, all enforced in Python, not left to the model:
+Requires `GEMINI_API_KEY` in the environment (free tier; model defaults to `gemini-3.8-flash`, override with `GEMINI_MODEL`). The LLM call itself lives in `src/fintrace/gemini_adapter.py`; `llm_investigation.py` only depends on a plain `Callable[[str], LLMInvestigationFinding]`, so swapping providers again means replacing that one adapter file. Guardrails, all enforced in Python, not left to the model:
 
 - `finding` can only be `possible_explanation` or `insufficient_evidence` — the response schema itself has no `confirmed` option.
 - The deterministic baseline (`investigate_discrepancy`) is computed first and is authoritative: the LLM cannot upgrade an `insufficient_evidence` baseline into `possible_explanation`. Violating this, or citing an `evidence_references` id that wasn't actually retrieved, returns **502** (an invalid LLM-generated result, not a client error).
@@ -88,9 +88,9 @@ Requires `GEMINI_API_KEY` in the environment (free tier; model defaults to `gemi
 
 A real `/investigate` call against `gemini-3.8-flash` for `LN-1001` (`150000` vs `135000`) succeeded on retry (first attempt hit a transient `503 UNAVAILABLE`): returned `finding: "possible_explanation"`, `requires_human_review: true`, and a `deterministic_finding` matching the baseline, with valid `evidence_references`.
 
-### v0.6 evaluation (`run_eval.py`, not part of pytest — makes real API calls)
+### v0.6 evaluation (`evals/run_eval.py`, not part of pytest — makes real API calls)
 
-Five held-out synthetic cases (`eval_cases.py`, loan ids `LN-7001`..`LN-7005`, never used while writing prompts or tests) were scored against hand-authored ground truth, separating the raw Gemini output from the guardrail-validated final result:
+Five held-out synthetic cases (`evals/eval_cases.py`, loan ids `LN-7001`..`LN-7005`, never used while writing prompts or tests) were scored against hand-authored ground truth, separating the raw Gemini output from the guardrail-validated final result:
 
 | Metric | Result |
 | --- | --- |
@@ -102,9 +102,9 @@ Five held-out synthetic cases (`eval_cases.py`, loan ids `LN-7001`..`LN-7005`, n
 
 Notable: case 5 included three decoy transactions (wrong system, wrong type, wrong amount) alongside one fully-correct one; the model cited only the correct one. Cases 3/4 (amount matches but wrong system / wrong type) were correctly called `insufficient_evidence`, not a naive amount-only match. The one "non-traceable" case (case 1) wasn't a wrong citation — the model additionally cited a legitimate contextual `system_update`, which the evaluation's exact-set-equality metric penalized; that's a limitation of the metric, not evidence of a bad citation. No guardrail intervention occurred in this run, so this evaluation didn't exercise that safety net - only `/investigate`'s unit tests (with a fake, deliberately-violating callable) do.
 
-### v0.7 hypothesis evaluation (`run_eval.py`, 2026-10-31)
+### v0.7 hypothesis evaluation (`evals/run_eval.py`, 2026-10-31)
 
-Ten cases (five new held-out, five v0.6 regression) against `gemini-3.8-flash`, raw results in `eval_results/v0_7_results.json`. The corrected summary is `eval_results/v0_7_summary.json`, recomputed offline with `python run_eval.py --rescore`; the `summary` embedded in the raw file predates two metric fixes (hypotheses counted across both case groups, true median latency) and should not be quoted.
+Ten cases (five new held-out, five v0.6 regression) against `gemini-3.8-flash`, raw results in `evals/results/v0_7_results.json`. The corrected summary is `evals/results/v0_7_summary.json`, recomputed offline with `python evals/run_eval.py --rescore`; the `summary` embedded in the raw file predates two metric fixes (hypotheses counted across both case groups, true median latency) and should not be quoted.
 
 | Metric | Result |
 | --- | --- |
@@ -121,6 +121,8 @@ Known weaknesses, not yet fixed:
 - `v06-3`: an unsupported synchronization hypothesis, correctly labelled `inconsistent_with_cited_evidence` by Python.
 - `manual_review` is still empty in every row; a deterministic rule alternative exists for all three discovered hypotheses, so no analytical advantage over rules is shown.
 
+Provenance: the `source_sha256` values recorded in `v0_7_results.json` match `eval_cases.py` and `llm_investigation.py` as of commit `8e528bf`, before the move to `src/fintrace/` changed their import lines. Check out that commit to verify them.
+
 ## Testing
 
 ```bash
@@ -132,7 +134,7 @@ pytest
 - No persistence or database — everything runs in memory per call.
 - No authentication on the API.
 - `/compare` accepts raw request bodies only; there is no endpoint to compare files already on the server.
-- `/investigate`'s evidence (`investigation.py`'s `TRANSACTIONS`/`SYSTEM_UPDATES`) is a small, fixed, synthetic dataset — not a real transaction source.
+- `/investigate`'s evidence (`src/fintrace/investigation.py`'s `TRANSACTIONS`/`SYSTEM_UPDATES`) is a small, fixed, synthetic dataset — not a real transaction source.
 - `/investigate` has been exercised against a **single** live Gemini call (see Live verification above) — not a broad or repeated check. The pytest suite (81 tests) still runs entirely offline against a fake `generate_finding` callable.
 - The 5-case v0.6 evaluation is a single run, no retries/sampling across multiple calls per case to check consistency, and it happened to produce zero guardrail interventions — the upgrade-blocking guardrail itself is only exercised by `test_llm_investigation.py`'s deliberately-violating fake callables, not by a real model response in this repo.
 - The v0.6 evidence-traceability metric uses exact set equality between cited and expected references, which penalizes a model response that cites correct *additional* context (as case 1 did) the same as one that cites something wrong — a stricter "citations include expected, and extras are plausible context" check would be more accurate but wasn't built to keep this increment small.

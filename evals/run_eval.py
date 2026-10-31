@@ -1,7 +1,7 @@
 """Evaluation runner for the deterministic baseline and LLM investigation.
 
 Runs the v0.7 held-out cases and the v0.6 regression cases, then writes
-every result to eval_results/v0_7_results.json. Each row keeps three groups
+every result to evals/results/v0_7_results.json. Each row keeps three groups
 apart:
 - model_output: exactly what the LLM returned, before any Python checks
 - python_labels: what Python computed or enforced (baseline, guardrail
@@ -12,10 +12,10 @@ manual_review starts empty: a human fills it in after reading the saved
 explanation and hypothesis text against the evidence.
 
 Makes real Gemini API calls - run manually, not part of pytest:
-    python run_eval.py
+    python evals/run_eval.py
 
 Recompute the summary from the saved results, offline:
-    python run_eval.py --rescore
+    python evals/run_eval.py --rescore
 """
 
 import hashlib
@@ -27,12 +27,11 @@ import time
 from datetime import date
 
 from eval_cases import HELD_OUT_CASES, REGRESSION_CASES, install_eval_fixtures
-from investigation import investigate_discrepancy
-from llm_investigation import INCONSISTENT, InvalidLLMFinding, generate_llm_finding
+from fintrace.investigation import investigate_discrepancy
+from fintrace.llm_investigation import INCONSISTENT, InvalidLLMFinding, generate_llm_finding
 
-RESULTS_PATH = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "eval_results", "v0_7_results.json"
-)
+EVALS_DIR = os.path.dirname(os.path.abspath(__file__))
+RESULTS_PATH = os.path.join(EVALS_DIR, "results", "v0_7_results.json")
 RETRY_DELAY_SECONDS = 5
 
 
@@ -277,7 +276,13 @@ def rescore(saved: dict) -> dict:
 
 
 def _sha256(filename: str) -> str:
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), filename)
+    from fintrace import llm_investigation
+
+    paths = {
+        "eval_cases.py": os.path.join(EVALS_DIR, "eval_cases.py"),
+        "llm_investigation.py": llm_investigation.__file__,
+    }
+    path = paths[filename]
     with open(path, "rb") as source:
         return hashlib.sha256(source.read()).hexdigest()
 
@@ -292,7 +297,7 @@ if __name__ == "__main__" and "--rescore" in sys.argv:
         json.dump(corrected, summary_file, indent=2)
     print(json.dumps(corrected["summary"], indent=2))
 elif __name__ == "__main__":
-    from gemini_adapter import MODEL, generate_finding
+    from fintrace.gemini_adapter import MODEL, generate_finding
 
     install_eval_fixtures()
     results = run(generate_finding)
