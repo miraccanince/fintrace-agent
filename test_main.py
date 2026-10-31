@@ -220,6 +220,89 @@ def test_decimal_amounts_are_compared_without_floating_point_error():
     ]
 
 
+def test_nan_amount_is_rejected_as_malformed():
+    system_a = [{"loan_id": "LN-4000", "outstanding_amount": Decimal("NaN"), "currency": "EUR"}]
+    system_b: list[dict] = []
+
+    results = compare_datasets(system_a, system_b)
+
+    assert results == [
+        {
+            "loan_id": "LN-4000",
+            "status": "malformed_in_a",
+            "difference": None,
+            "reason": "outstanding_amount must be a finite number",
+        }
+    ]
+
+
+def test_infinity_amount_is_rejected_as_malformed():
+    system_a = [
+        {"loan_id": "LN-4001", "outstanding_amount": Decimal("Infinity"), "currency": "EUR"}
+    ]
+    system_b: list[dict] = []
+
+    results = compare_datasets(system_a, system_b)
+
+    assert results == [
+        {
+            "loan_id": "LN-4001",
+            "status": "malformed_in_a",
+            "difference": None,
+            "reason": "outstanding_amount must be a finite number",
+        }
+    ]
+
+
+def test_csv_string_nan_amount_is_rejected_as_malformed(tmp_path):
+    csv_path = tmp_path / "loans.csv"
+    csv_path.write_text("loan_id,outstanding_amount,currency\nLN-4002,NaN,EUR\n")
+
+    loans = load_loans_from_csv(str(csv_path))
+    results = compare_datasets(loans, [])
+
+    assert results == [
+        {
+            "loan_id": "LN-4002",
+            "status": "malformed_in_a",
+            "difference": None,
+            "reason": "outstanding_amount must be a finite number",
+        }
+    ]
+
+
+def test_non_string_loan_id_is_reported_as_unidentified():
+    system_a = [{"loan_id": 1001, "outstanding_amount": 100, "currency": "EUR"}]
+    system_b: list[dict] = []
+
+    results = compare_datasets(system_a, system_b)
+
+    assert results == [
+        {
+            "loan_id": None,
+            "status": "unidentified_in_a",
+            "difference": None,
+            "reason": "missing loan_id",
+        }
+    ]
+
+
+def test_whitespace_only_loan_id_is_reported_as_unidentified():
+    system_a = [{"loan_id": "   ", "outstanding_amount": 100, "currency": "EUR"}]
+    system_b: list[dict] = []
+
+    results = compare_datasets(system_a, system_b)
+
+    assert results == [
+        {
+            "loan_id": None,
+            "status": "unidentified_in_a",
+            "difference": None,
+            "reason": "missing loan_id",
+        }
+    ]
+
+
 def test_running_main_module_works_regardless_of_working_directory(tmp_path):
     repo_root = Path(__file__).resolve().parent
     result = subprocess.run(

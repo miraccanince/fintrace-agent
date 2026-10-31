@@ -33,6 +33,10 @@ def load_loans_from_csv(path: str) -> list[dict]:
     return loans
 
 
+def _is_valid_loan_id(loan_id) -> bool:
+    return isinstance(loan_id, str) and loan_id.strip() != ""
+
+
 def _malformed_reason(loan: dict) -> str | None:
     missing = [key for key in ("currency", "outstanding_amount") if key not in loan]
     if missing:
@@ -44,6 +48,9 @@ def _malformed_reason(loan: dict) -> str | None:
     amount = loan["outstanding_amount"]
     if isinstance(amount, bool) or not isinstance(amount, (int, Decimal)):
         return "outstanding_amount is not a number"
+
+    if isinstance(amount, Decimal) and not amount.is_finite():
+        return "outstanding_amount must be a finite number"
 
     return None
 
@@ -76,7 +83,7 @@ def _index_and_validate(
     occurrence_counts: dict = {}
     for loan in system:
         loan_id = loan.get("loan_id")
-        if loan_id:
+        if _is_valid_loan_id(loan_id):
             occurrence_counts[loan_id] = occurrence_counts.get(loan_id, 0) + 1
     duplicate_ids = {
         loan_id for loan_id, count in occurrence_counts.items() if count > 1
@@ -88,7 +95,7 @@ def _index_and_validate(
     for loan in system:
         loan_id = loan.get("loan_id")
 
-        if not loan_id:
+        if not _is_valid_loan_id(loan_id):
             issues.append(
                 {
                     "loan_id": None,
