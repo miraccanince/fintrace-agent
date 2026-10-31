@@ -1,6 +1,8 @@
-# financial-data-reliability
+# FinTrace Agent
 
-Compares synthetic loan records from two systems and reports discrepancies as structured results — a small, portfolio-scale proof of concept, not a production banking tool.
+**Evidence-Driven Financial Investigation**
+
+The goal of this project is an AI agent that investigates discrepancies across financial systems, traces supporting evidence, and helps analysts understand potential causes. The agent itself is still planned (see [FINTRACE_AGENT_ROADMAP.md](FINTRACE_AGENT_ROADMAP.md)). Today the project compares synthetic loan records from two systems, reports discrepancies as structured results, and investigates them with a deterministic baseline and an LLM-assisted `/investigate` endpoint — a small, portfolio-scale proof of concept, not a production banking tool.
 
 ## What it does
 

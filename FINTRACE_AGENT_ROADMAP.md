@@ -1,8 +1,10 @@
-# Financial Data Reliability Agent
+# FinTrace Agent
+
+*Evidence-Driven Financial Investigation*
 
 **Agile Engineering Roadmap · v2.0 · 31 October 2026**
 
-Repository: https://github.com/miraccanince/financial-data-reliability
+Repository: https://github.com/miraccanince/fintrace-agent
 
 ## Vision
 
