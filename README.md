@@ -75,7 +75,7 @@ Response:
 }
 ```
 
-Requires `GEMINI_API_KEY` in the environment (free tier; model defaults to `gemini-2.0-flash`, override with `GEMINI_MODEL`). The LLM call itself lives in `gemini_adapter.py`; `llm_investigation.py` only depends on a plain `Callable[[str], LLMInvestigationFinding]`, so swapping providers again means replacing that one adapter file. Guardrails, all enforced in Python, not left to the model:
+Requires `GEMINI_API_KEY` in the environment (free tier; model defaults to `gemini-3.8-flash`, override with `GEMINI_MODEL`). The LLM call itself lives in `gemini_adapter.py`; `llm_investigation.py` only depends on a plain `Callable[[str], LLMInvestigationFinding]`, so swapping providers again means replacing that one adapter file. Guardrails, all enforced in Python, not left to the model:
 
 - `finding` can only be `possible_explanation` or `insufficient_evidence` — the response schema itself has no `confirmed` option.
 - The deterministic baseline (`investigate_discrepancy`) is computed first and is authoritative: the LLM cannot upgrade an `insufficient_evidence` baseline into `possible_explanation`. Violating this, or citing an `evidence_references` id that wasn't actually retrieved, returns **502** (an invalid LLM-generated result, not a client error).
@@ -94,5 +94,7 @@ pytest
 - No authentication on the API.
 - `/compare` accepts raw request bodies only; there is no endpoint to compare files already on the server.
 - `/investigate`'s evidence (`investigation.py`'s `TRANSACTIONS`/`SYSTEM_UPDATES`) is a small, fixed, synthetic dataset — not a real transaction source.
-- `/investigate` is tested entirely offline with a fake `generate_finding` callable; it has not been exercised against a live Gemini API call in this repo. `gemini-2.0-flash`'s free-tier structured-output support is based on Google's public documentation, not verified here with a real request.
+- `/investigate` has **not been exercised against a live Gemini API call in this repo** — no `GEMINI_API_KEY`/`GOOGLE_API_KEY` was available in this environment to run one (verified 2026-10-31: neither variable is set). All 52 tests, including every LLM-path test, run against a fake `generate_finding` callable and never reach the network. Live verification (a real API call confirming a `LLMInvestigationFinding` comes back, passes validation, and keeps `requires_human_review=True`) is still outstanding and should be the first thing re-checked once a key is available.
+- `gemini-2.0-flash` (this adapter's original default) was shut down by Google. The current default, `gemini-3.8-flash`, and its free-tier + structured-output support were confirmed by fetching `ai.google.dev/gemini-api/docs/models`, `.../structured-output`, and `.../pricing` on 2026-10-31 — confirmed against Google's docs, not against a live call.
+- The installed `google-genai` SDK (2.34.0, the latest release) configures structured output via `GenerateContentConfig(response_mime_type=..., response_schema=...)`. Google's current docs show a differently-shaped `response_format` parameter in their examples; that may be a newer REST/other-language convention not yet exposed by this Python SDK release. This adapter uses the fields the installed SDK actually has (verified by introspecting `GenerateContentConfig.model_fields`), not the docs' example shape — re-check this if upgrading the SDK.
 - `/investigate` only supports Google's Gemini via `response_schema` structured output — no other LLM provider configured at once (swapping is a one-file change, see above).
