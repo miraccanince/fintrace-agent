@@ -2,7 +2,7 @@
 
 *Evidence-Driven Financial Investigation*
 
-**Agile Engineering Roadmap · v2.1 · 31 October 2026**
+**Agile Engineering Roadmap · v2.2 · 31 October 2026**
 
 Repository: https://github.com/miraccanince/fintrace-agent
 
@@ -65,10 +65,10 @@ Status reflects the repository as of this roadmap version.
 | **v0.5c — Free LLM provider** | Done | Gemini free tier behind a plain callable dependency (`gemini_adapter.py`); one live smoke test passed. | Provider independence, credentials via `.env`, live verification. |
 | **v0.6 — Gemini evaluation** | Done | Five held-out cases scored against hand-authored ground truth. Gemini matched the baseline and mainly added natural-language explanation; no measurable analytical value was shown. | Correctness, unsupported claims, traceability, honest interpretation. |
 | **v0.7 — Evidence-based hypothesis evaluation** | Done (live evaluation run 2026-10-31; weaknesses recorded in README) | Optional AI hypothesis (partial payments, synchronization timing, conflicting evidence) labelled by Python consistency checks, separate from the authoritative finding. | Separating model output from Python-enforced status; negative controls. |
-| **v0.7b — Realistic synthetic banking data** | Next (not started) | Replace the small fixed evidence lists with seeded, SQLite-backed synthetic banking data containing controlled discrepancies, ground truth kept away from the agent, read-only access functions, and multi-step scenarios with known expected outcomes. Starts with a minimal `src` layout restructuring. | Package layout, data modelling, seeded generation, SQL, test-data isolation. |
-| **v0.8a — Minimal agent loop** | Planned | Investigate a loan by ID with Gemini dynamically selecting and invoking read-only Python tools through a bounded execution loop. | Tool calling, agent loop, bounded execution, trace testing. |
+| **v0.7b — Realistic synthetic banking data** | Partially complete | Done and verified: `src` layout, SQLite schema with read-only access (`banking_db.py`), seeded generator (`synthetic_data.py`), controlled discrepancy scenarios S1–S4 with ground truth in a separate file, and the read-only tools built on it. Not done: migration of the legacy fixtures (`investigation.py` lists, the runtime fixtures in `evals/eval_cases.py`) and of `/investigate` and the v0.7 evaluation to the new data. These stay as Keep, planned replacement until the agent has live evidence. | Package layout, data modelling, seeded generation, SQL, test-data isolation. |
+| **v0.8a — Minimal agent loop** | Implemented; live validation incomplete | Done and offline-tested (305 tests): read-only tools with two deterministic calculators (`tools.py`), bounded harness with allowlist, argument validation, budget, stop reasons, trace and final-answer checks (`harness.py`), Gemini function-calling agent and CLI (`agent.py`). Not done: a completed live investigation. One S1 attempt reached Gemini and its first function call (tool schemas accepted) and then hit the free-tier daily quota. | Tool calling, agent loop, bounded execution, trace testing. |
 | **v0.8b — MCP integration** | Planned | Expose the existing investigation tools through one minimal local MCP server; the agent discovers and invokes them through an MCP client. | MCP server/client, tool discovery, process boundaries, integration tests. |
-| **v0.9 — Multi-step investigation** | Planned | Multi-step investigations with bounded execution and explicit handling of tool errors, invalid calls, and limits. | Failure handling, stopping conditions, robustness. |
+| **v0.9 — Multi-step investigation** | Planned, scope reduced | Most mechanics already exist in the v0.8a harness: bounded execution, rejected and invalid calls, tool errors, stop reasons. What remains is measuring them live: robustness runs over S1–S4, clean and unknown loans, repeated runs, and a comparison with the deterministic baseline (which needs the baseline to run on the SQLite data). | Failure handling, stopping conditions, robustness. |
 | **v0.10 — Architecture assessment** | Planned | Broader architecture assessment, not a mandatory refactor. Restructure (potentially lightweight Ports and Adapters) only if the evidence justifies it; otherwise keep the structure and record that as the outcome. The minimal `src` layout is done earlier, in v0.7b. | Boundaries, coupling, evidence-based refactoring decisions. |
 | **v0.11 — Delivery and operations** | Planned | API security, Docker, CI, and observability. | Auth, containers, GitHub Actions, logging, tracing. |
 | **v0.12 — Minimal web UI** | Planned | Minimal web UI for requesting an investigation and reading the report and trace. | Frontend basics, API consumption, UX for human review. |
@@ -91,6 +91,8 @@ Why before the agent: the current evidence is a small fixed list in `investigati
 9. **Existing behaviour preserved.** HTTP contracts, deterministic findings, guardrails, and v0.7 evaluation provenance stay intact; `/investigate` and the evaluation read the new data source.
 10. **Tests.** Offline tests cover reproducibility from a seed, injected discrepancies against ground truth, isolation of ground truth, read-only enforcement, and failure cases (unknown loan, empty result).
 
+Status: criteria 1–5, 7, 8 and 10 are met. Criteria 6 and 9 are only partly met: the SQLite data exists, but the module-level lists, `/investigate` and the v0.7 evaluation still read the legacy fixtures (see Keep / Replace / Retire / Remove). No command yet creates the database file; it is generated by calling `generate_database_with_scenarios`.
+
 Out of scope for v0.7b: the agent loop, MCP, write-capable tools, a database server, an ORM, and data volume beyond what the scenarios need.
 
 ## v0.8a acceptance criteria: minimal agent loop
@@ -105,6 +107,8 @@ Out of scope for v0.7b: the agent loop, MCP, write-capable tools, a database ser
 - The agent cannot modify financial records.
 - Every final explanation requires human review.
 - The tool-call trace is observable and covered by offline tests using a scripted fake LLM.
+
+Status: all criteria except two are met and covered offline. Two need a completed live run: that the model's tool choice follows what it has learned, and that different scenarios give different tool-call sequences.
 
 Out of scope for v0.8a: MCP (that is v0.8b), LangGraph, multi-agent architecture, and new abstractions without a demonstrated requirement.
 

@@ -2,7 +2,7 @@
 
 **Evidence-Driven Financial Investigation**
 
-The goal of this project is an AI agent that investigates discrepancies across financial systems, traces supporting evidence, and helps analysts understand potential causes. The agent itself is still planned (see [FINTRACE_AGENT_ROADMAP.md](FINTRACE_AGENT_ROADMAP.md)). Today the project compares synthetic loan records from two systems, reports discrepancies as structured results, and investigates them with a deterministic baseline and an LLM-assisted `/investigate` endpoint — a small, portfolio-scale proof of concept, not a production banking tool.
+The goal of this project is an AI agent that investigates discrepancies across financial systems, traces supporting evidence, and helps analysts understand potential causes. A tool-using investigation agent is implemented and tested offline; its live validation against Gemini is not finished (see [FINTRACE_AGENT_ROADMAP.md](FINTRACE_AGENT_ROADMAP.md)). The project compares synthetic loan records from two systems, reports discrepancies as structured results, investigates them with a deterministic baseline and an LLM-assisted `/investigate` endpoint, and has an agent CLI that investigates one loan in a synthetic SQLite database — a small, portfolio-scale proof of concept, not a production banking tool.
 
 ## What it does
 
@@ -49,6 +49,26 @@ Then `POST /compare` with a JSON body:
   "system_b": [{"loan_id": "LN-1001", "outstanding_amount": 135000, "currency": "EUR"}]
 }
 ```
+
+### Investigation agent (CLI)
+
+The agent investigates one loan in a synthetic SQLite database. Gemini chooses among six read-only tools; Python validates every call, limits the number of calls, and computes every number in the report.
+
+Create a database and its ground-truth file (write them outside the repository, for example under `/tmp`; the ground truth is for evaluation only and is never readable by the agent):
+
+```bash
+python -c "from fintrace.synthetic_data import generate_database_with_scenarios as g; g('/tmp/banking.db', '/tmp/ground_truth.json', seed=42)"
+```
+
+Run the agent (needs `GEMINI_API_KEY`; prints the report as JSON):
+
+```bash
+python -m fintrace.agent LN-5008 --db /tmp/banking.db --max-tool-calls 8
+```
+
+The database holds 15 loans, six days of snapshots from `loan_system` and `risk_system`, and transactions from both systems and a payment gateway. Four loans carry known discrepancies (partial posting, failed batch posting, a reversal applied in one system, a fee posted in one system); the others reconcile. The report contains the stop reason, the tool-call trace, the finding, the cited record ids, and a deterministic comparison of the two systems' latest snapshots. Citations are only checked to have been retrieved in the same run; the explanation text is written by the model and is not verified, and a human must review every report.
+
+Status: the agent is covered by offline tests only. One live attempt on a single scenario reached Gemini and its first tool call, then hit the free-tier daily quota, so no completed live investigation or result is reported yet.
 
 ### LLM-assisted investigation (`/investigate`)
 
@@ -131,11 +151,13 @@ pytest
 
 ## Known limitations
 
-- No persistence or database — everything runs in memory per call.
+- `/compare` and `/investigate` keep everything in memory per call. Only the agent CLI reads a database (generated, read-only SQLite).
 - No authentication on the API.
 - `/compare` accepts raw request bodies only; there is no endpoint to compare files already on the server.
-- `/investigate`'s evidence (`src/fintrace/investigation.py`'s `TRANSACTIONS`/`SYSTEM_UPDATES`) is a small, fixed, synthetic dataset — not a real transaction source.
-- `/investigate` has been exercised against a **single** live Gemini call (see Live verification above) — not a broad or repeated check. The pytest suite (81 tests) still runs entirely offline against a fake `generate_finding` callable.
+- `/investigate` and the v0.7 evaluation still use the small fixed fixtures in `src/fintrace/investigation.py` (`TRANSACTIONS`/`SYSTEM_UPDATES`) and `evals/eval_cases.py`, not the SQLite data. All data is synthetic.
+- No command creates the database file yet; call `generate_database_with_scenarios` as shown above.
+- Agent live validation is incomplete (see the agent section). No agent-versus-baseline comparison exists yet.
+- `/investigate` has been exercised against a **single** live Gemini call (see Live verification above) — not a broad or repeated check. The pytest suite (305 tests) runs entirely offline against fake model callables.
 - The 5-case v0.6 evaluation is a single run, no retries/sampling across multiple calls per case to check consistency, and it happened to produce zero guardrail interventions — the upgrade-blocking guardrail itself is only exercised by `test_llm_investigation.py`'s deliberately-violating fake callables, not by a real model response in this repo.
 - The v0.6 evidence-traceability metric uses exact set equality between cited and expected references, which penalizes a model response that cites correct *additional* context (as case 1 did) the same as one that cites something wrong — a stricter "citations include expected, and extras are plausible context" check would be more accurate but wasn't built to keep this increment small.
 - `gemini-2.0-flash` (this adapter's original default) was shut down by Google. The current default, `gemini-3.8-flash`, and its free-tier + structured-output support were confirmed by fetching `ai.google.dev/gemini-api/docs/models`, `.../structured-output`, and `.../pricing` on 2026-10-31 — confirmed against Google's docs, not against a live call.
