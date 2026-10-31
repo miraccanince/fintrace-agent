@@ -75,7 +75,7 @@ Response:
 }
 ```
 
-Requires `ANTHROPIC_API_KEY` in the environment. Guardrails, all enforced in Python, not left to the model:
+Requires `GEMINI_API_KEY` in the environment (free tier; model defaults to `gemini-2.0-flash`, override with `GEMINI_MODEL`). The LLM call itself lives in `gemini_adapter.py`; `llm_investigation.py` only depends on a plain `Callable[[str], LLMInvestigationFinding]`, so swapping providers again means replacing that one adapter file. Guardrails, all enforced in Python, not left to the model:
 
 - `finding` can only be `possible_explanation` or `insufficient_evidence` — the response schema itself has no `confirmed` option.
 - The deterministic baseline (`investigate_discrepancy`) is computed first and is authoritative: the LLM cannot upgrade an `insufficient_evidence` baseline into `possible_explanation`. Violating this, or citing an `evidence_references` id that wasn't actually retrieved, returns **502** (an invalid LLM-generated result, not a client error).
@@ -94,5 +94,5 @@ pytest
 - No authentication on the API.
 - `/compare` accepts raw request bodies only; there is no endpoint to compare files already on the server.
 - `/investigate`'s evidence (`investigation.py`'s `TRANSACTIONS`/`SYSTEM_UPDATES`) is a small, fixed, synthetic dataset — not a real transaction source.
-- `/investigate` is tested entirely offline with a fake LLM client; it has not been exercised against a live Anthropic API call in this repo.
-- `/investigate` only supports Anthropic's Claude via `output_config.format` structured outputs — no other LLM provider yet.
+- `/investigate` is tested entirely offline with a fake `generate_finding` callable; it has not been exercised against a live Gemini API call in this repo. `gemini-2.0-flash`'s free-tier structured-output support is based on Google's public documentation, not verified here with a real request.
+- `/investigate` only supports Google's Gemini via `response_schema` structured output — no other LLM provider configured at once (swapping is a one-file change, see above).

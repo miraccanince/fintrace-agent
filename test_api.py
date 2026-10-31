@@ -2,22 +2,9 @@ from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
-from api import app, get_llm_client
+from api import app, get_llm_generate_finding
 
 client = TestClient(app)
-
-
-class FakeMessages:
-    def __init__(self, parsed_output):
-        self._parsed_output = parsed_output
-
-    def parse(self, **kwargs):
-        return SimpleNamespace(parsed_output=self._parsed_output)
-
-
-class FakeClient:
-    def __init__(self, parsed_output):
-        self.messages = FakeMessages(parsed_output)
 
 
 def _finding(**overrides):
@@ -155,7 +142,7 @@ def test_compare_endpoint_serializes_difference_as_decimal_string_without_float_
 
 
 def test_investigate_endpoint_returns_llm_finding_offline():
-    app.dependency_overrides[get_llm_client] = lambda: FakeClient(_finding())
+    app.dependency_overrides[get_llm_generate_finding] = lambda: (lambda prompt: _finding())
     try:
         response = client.post(
             "/investigate",
@@ -168,7 +155,7 @@ def test_investigate_endpoint_returns_llm_finding_offline():
             },
         )
     finally:
-        app.dependency_overrides.pop(get_llm_client, None)
+        app.dependency_overrides.pop(get_llm_generate_finding, None)
 
     assert response.status_code == 200
     body = response.json()
@@ -177,8 +164,8 @@ def test_investigate_endpoint_returns_llm_finding_offline():
 
 
 def test_investigate_endpoint_returns_502_for_invalid_evidence_reference():
-    app.dependency_overrides[get_llm_client] = lambda: FakeClient(
-        _finding(evidence_references=["transaction:99"])
+    app.dependency_overrides[get_llm_generate_finding] = lambda: (
+        lambda prompt: _finding(evidence_references=["transaction:99"])
     )
     try:
         response = client.post(
@@ -192,14 +179,14 @@ def test_investigate_endpoint_returns_502_for_invalid_evidence_reference():
             },
         )
     finally:
-        app.dependency_overrides.pop(get_llm_client, None)
+        app.dependency_overrides.pop(get_llm_generate_finding, None)
 
     assert response.status_code == 502
 
 
 def test_investigate_endpoint_returns_502_for_unauthorized_upgrade():
-    app.dependency_overrides[get_llm_client] = lambda: FakeClient(
-        _finding(
+    app.dependency_overrides[get_llm_generate_finding] = lambda: (
+        lambda prompt: _finding(
             loan_id="LN-9999",
             finding="possible_explanation",
             evidence_references=[],
@@ -217,13 +204,13 @@ def test_investigate_endpoint_returns_502_for_unauthorized_upgrade():
             },
         )
     finally:
-        app.dependency_overrides.pop(get_llm_client, None)
+        app.dependency_overrides.pop(get_llm_generate_finding, None)
 
     assert response.status_code == 502
 
 
 def test_investigate_endpoint_returns_422_for_equal_amounts():
-    app.dependency_overrides[get_llm_client] = lambda: FakeClient(_finding())
+    app.dependency_overrides[get_llm_generate_finding] = lambda: (lambda prompt: _finding())
     try:
         response = client.post(
             "/investigate",
@@ -236,14 +223,14 @@ def test_investigate_endpoint_returns_422_for_equal_amounts():
             },
         )
     finally:
-        app.dependency_overrides.pop(get_llm_client, None)
+        app.dependency_overrides.pop(get_llm_generate_finding, None)
 
     assert response.status_code == 422
 
 
 def test_investigate_endpoint_forces_requires_human_review_true():
-    app.dependency_overrides[get_llm_client] = lambda: FakeClient(
-        _finding(requires_human_review=False)
+    app.dependency_overrides[get_llm_generate_finding] = lambda: (
+        lambda prompt: _finding(requires_human_review=False)
     )
     try:
         response = client.post(
@@ -257,7 +244,7 @@ def test_investigate_endpoint_forces_requires_human_review_true():
             },
         )
     finally:
-        app.dependency_overrides.pop(get_llm_client, None)
+        app.dependency_overrides.pop(get_llm_generate_finding, None)
 
     assert response.status_code == 200
     assert response.json()["requires_human_review"] is True

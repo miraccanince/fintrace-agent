@@ -4,6 +4,7 @@ from typing import Any
 from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel
 
+from gemini_adapter import generate_finding as gemini_generate_finding
 from llm_investigation import InvalidLLMFinding, generate_llm_finding
 from main import compare_datasets, parse_amount
 
@@ -49,15 +50,13 @@ class InvestigateRequest(BaseModel):
     system_b: str
 
 
-def get_llm_client():
-    import anthropic
-
-    return anthropic.Anthropic()
+def get_llm_generate_finding():
+    return gemini_generate_finding
 
 
 @app.post("/investigate")
 def investigate(
-    request: InvestigateRequest, client=Depends(get_llm_client)
+    request: InvestigateRequest, generate_finding=Depends(get_llm_generate_finding)
 ) -> dict:
     try:
         return generate_llm_finding(
@@ -66,7 +65,7 @@ def investigate(
             amount_b=parse_amount(request.amount_b),
             system_a=request.system_a,
             system_b=request.system_b,
-            client=client,
+            generate_finding=generate_finding,
         )
     except InvalidLLMFinding as error:
         raise HTTPException(status_code=502, detail=str(error)) from error

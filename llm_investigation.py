@@ -1,12 +1,9 @@
-import os
 from decimal import Decimal
-from typing import Literal
+from typing import Callable, Literal
 
 from pydantic import BaseModel
 
 from investigation import get_system_updates, get_transactions, investigate_discrepancy
-
-MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-opus-5-5")
 
 
 class InvalidLLMFinding(ValueError):
@@ -87,7 +84,7 @@ def generate_llm_finding(
     amount_b: Decimal,
     system_a: str,
     system_b: str,
-    client=None,
+    generate_finding: Callable[[str], LLMInvestigationFinding],
 ) -> dict:
     """Generate an evidence-grounded investigation finding using an LLM.
 
@@ -95,8 +92,13 @@ def generate_llm_finding(
     and is authoritative: the LLM interprets the same retrieved evidence but
     cannot upgrade an `insufficient_evidence` baseline, and the response
     schema itself only allows `possible_explanation` or
-    `insufficient_evidence` (never `confirmed`). `client` is injected so
-    tests can run fully offline.
+    `insufficient_evidence` (never `confirmed`).
+
+    `generate_finding` takes a prompt and returns a parsed
+    `LLMInvestigationFinding` - this module has no knowledge of which LLM
+    provider is behind it (see `gemini_adapter.py` for the current one).
+    Provider selection is the caller's responsibility; tests inject a plain
+    function so they run fully offline.
 
     `requires_human_review` is always `True` in the returned result - this
     is a Python-enforced policy, not something the LLM decides.
@@ -104,11 +106,6 @@ def generate_llm_finding(
     baseline = investigate_discrepancy(loan_id, amount_a, amount_b, system_a, system_b)
 
     evidence_context, transactions, system_updates = _build_evidence_context(loan_id)
-
-    if client is None:
-        import anthropic
-
-        client = anthropic.Anthropic()
 
     prompt = (
         f"Loan {loan_id} discrepancy:\n"
@@ -129,13 +126,7 @@ def generate_llm_finding(
         f"(e.g. 'transaction:0') in evidence_references."
     )
 
-    response = client.messages.parse(
-        model=MODEL,
-        max_tokens=1024,
-        messages=[{"role": "user", "content": prompt}],
-        output_format=LLMInvestigationFinding,
-    )
-    result = response.parsed_output
+    result = generate_finding(prompt)
 
     _validate_llm_result(result, loan_id, baseline["finding"], transactions, system_updates)
 
