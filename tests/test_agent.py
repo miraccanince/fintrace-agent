@@ -186,10 +186,37 @@ def call_adapter():
         [{"role": "user", "parts": [{"text": "hi"}]}], [dict(tools.contracts()["get_loan"])], "system text")
 
 
+def rate_limit(delay):
+    details = [{"@type": "type.googleapis.com/google.rpc.Help"}]
+    if delay is not None:
+        details.append({"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": delay})
+    return errors.ClientError(429, {"error": {"code": 429, "message": "slow", "status": "RESOURCE_EXHAUSTED", "details": details}})
+
+
 def test_transient_errors_are_retried_up_to_three_attempts(fake_gemini):
-    fake_gemini.outcomes = [server_error(), errors.ClientError(429, {"error": {"message": "slow", "status": "RESOURCE_EXHAUSTED"}}), "reply"]
+    fake_gemini.outcomes = [server_error(), rate_limit("0s"), "reply"]
 
     assert call_adapter() == "reply" and fake_gemini.calls == 3
+
+
+@pytest.mark.parametrize("delay", ["31423s", "61s", None, "soon"])
+def test_a_429_without_a_short_requested_delay_is_not_retried(fake_gemini, delay):
+    fake_gemini.outcomes = [rate_limit(delay), "never reached"]
+
+    with pytest.raises(errors.ClientError):
+        call_adapter()
+    assert fake_gemini.calls == 1
+
+
+def test_a_short_429_waits_at_least_the_requested_delay(fake_gemini, monkeypatch):
+    waits = []
+    monkeypatch.setattr(gemini_adapter.time, "sleep", waits.append)
+    monkeypatch.setattr(gemini_adapter, "RETRY_DELAY_SECONDS", 5)
+    fake_gemini.outcomes = [rate_limit("12s"), rate_limit("1s"), server_error(), "x"]
+
+    with pytest.raises(errors.ServerError):
+        call_adapter()
+    assert waits == [12.0, 5]  # the requested 12 s, then the 5 s floor for a 1 s request
 
 
 def test_the_third_transient_failure_is_raised(fake_gemini):
