@@ -1,5 +1,5 @@
 __pycache__/
 .pytest_cache/
 .DS_Store
-CLAUDE.md
 .env
+.claude/scheduled_tasks.lock

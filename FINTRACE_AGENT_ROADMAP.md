@@ -2,7 +2,7 @@
 
 *Evidence-Driven Financial Investigation*
 
-**Agile Engineering Roadmap · v2.0 · 31 October 2026**
+**Agile Engineering Roadmap · v2.1 · 31 October 2026**
 
 Repository: https://github.com/miraccanince/fintrace-agent
 
@@ -65,15 +65,33 @@ Status reflects the repository as of this roadmap version.
 | **v0.5c — Free LLM provider** | Done | Gemini free tier behind a plain callable dependency (`gemini_adapter.py`); one live smoke test passed. | Provider independence, credentials via `.env`, live verification. |
 | **v0.6 — Gemini evaluation** | Done | Five held-out cases scored against hand-authored ground truth. Gemini matched the baseline and mainly added natural-language explanation; no measurable analytical value was shown. | Correctness, unsupported claims, traceability, honest interpretation. |
 | **v0.7 — Evidence-based hypothesis evaluation** | Done (live evaluation run 2026-10-31; weaknesses recorded in README) | Optional AI hypothesis (partial payments, synchronization timing, conflicting evidence) labelled by Python consistency checks, separate from the authoritative finding. | Separating model output from Python-enforced status; negative controls. |
-| **v0.8a — Minimal agent loop** | Next | Investigate a loan by ID with Gemini dynamically selecting and invoking read-only Python tools through a bounded execution loop. | Tool calling, agent loop, bounded execution, trace testing. |
+| **v0.7b — Realistic synthetic banking data** | Next (not started) | Replace the small fixed evidence lists with seeded, SQLite-backed synthetic banking data containing controlled discrepancies, ground truth kept away from the agent, read-only access functions, and multi-step scenarios with known expected outcomes. Starts with a minimal `src` layout restructuring. | Package layout, data modelling, seeded generation, SQL, test-data isolation. |
+| **v0.8a — Minimal agent loop** | Planned | Investigate a loan by ID with Gemini dynamically selecting and invoking read-only Python tools through a bounded execution loop. | Tool calling, agent loop, bounded execution, trace testing. |
 | **v0.8b — MCP integration** | Planned | Expose the existing investigation tools through one minimal local MCP server; the agent discovers and invokes them through an MCP client. | MCP server/client, tool discovery, process boundaries, integration tests. |
 | **v0.9 — Multi-step investigation** | Planned | Multi-step investigations with bounded execution and explicit handling of tool errors, invalid calls, and limits. | Failure handling, stopping conditions, robustness. |
-| **v0.10 — Architecture assessment** | Planned | Focused assessment of the structure; restructure (potentially lightweight Ports and Adapters) only if it is justified, otherwise keep the current structure. | Boundaries, coupling, evidence-based refactoring decisions. |
+| **v0.10 — Architecture assessment** | Planned | Broader architecture assessment, not a mandatory refactor. Restructure (potentially lightweight Ports and Adapters) only if the evidence justifies it; otherwise keep the structure and record that as the outcome. The minimal `src` layout is done earlier, in v0.7b. | Boundaries, coupling, evidence-based refactoring decisions. |
 | **v0.11 — Delivery and operations** | Planned | API security, Docker, CI, and observability. | Auth, containers, GitHub Actions, logging, tracing. |
 | **v0.12 — Minimal web UI** | Planned | Minimal web UI for requesting an investigation and reading the report and trace. | Frontend basics, API consumption, UX for human review. |
 | **v1.0 — Portfolio release** | Planned | Final evaluation, end-to-end demonstration, documentation, and portfolio release. | Engineering communication, reproducibility, technical ownership. |
 
 If an increment does not deliver meaningful value, split, reorder, or drop it. The agent is the product direction, not a proven result: where evaluation shows a deterministic step is simpler and as good, keep it deterministic.
+
+## v0.7b acceptance criteria: realistic synthetic banking data
+
+Why before the agent: the current evidence is a small fixed list in `investigation.py` that evaluation code overwrites at runtime. An agent that chooses among tools needs data large and varied enough for tool choice and multi-step investigation to matter, and evaluation needs ground truth the agent cannot read.
+
+1. **Minimal restructuring first.** Move to the `src` layout (see ADR below) as a separate, tested change before any data work. No behaviour change.
+2. **Financial data specification.** A short written spec of the entities (loans, transactions, system updates, balances per system), their fields, types, and invariants. Money is `Decimal`; the spec is the contract the generator and the access functions follow.
+3. **Seeded generation.** A deterministic generator: the same seed produces identical data. Synthetic only; no real or confidential data.
+4. **Controlled discrepancy injection.** Discrepancies of known kinds (for example partial payments, synchronization delay, reversal, wrong system, wrong type, missing evidence) are injected at known places, including cases with no discoverable explanation.
+5. **Ground truth isolated.** Expected explanations and outcomes are stored separately from the agent-accessible data (separate file or database). No access function can read them; only evaluation code can.
+6. **SQLite storage.** The generated data is stored in SQLite. Replaces the module-level `TRANSACTIONS` / `SYSTEM_UPDATES` lists and the runtime fixture installation in `eval_cases.py`; their consumers are migrated, then the lists are removed.
+7. **Read-only access functions.** Plain functions that query the data (for example transactions or system updates for a loan). Connections are opened read-only. Tests show that writes through these functions are impossible.
+8. **Multi-step scenarios.** Scenarios where finding the explanation requires several lookups, each with a known expected outcome, for use by the v0.8a agent and by evaluation.
+9. **Existing behaviour preserved.** HTTP contracts, deterministic findings, guardrails, and v0.7 evaluation provenance stay intact; `/investigate` and the evaluation read the new data source.
+10. **Tests.** Offline tests cover reproducibility from a seed, injected discrepancies against ground truth, isolation of ground truth, read-only enforcement, and failure cases (unknown loan, empty result).
+
+Out of scope for v0.7b: the agent loop, MCP, write-capable tools, a database server, an ORM, and data volume beyond what the scenarios need.
 
 ## v0.8a acceptance criteria: minimal agent loop
 
@@ -180,6 +198,46 @@ Revisit when:
 ```
 
 Key decisions to evaluate rather than assume: functions vs classes; layered vs Ports and Adapters; direct SQL vs search/RAG; deterministic workflow vs agent for each investigation step; plain-Python agent loop vs a framework; one MCP server vs several; single vs multi-agent; local vs cloud. A governed, traceable deterministic baseline is required before claiming an agent adds value.
+
+### ADR: Standard `src` layout
+
+```text
+Decision: Move importable code to src/fintrace/ at the start of v0.7b, with
+  tests/, evals/ and data/ outside src/. Date: 31 October 2026 (approved;
+  not yet implemented).
+Problem / requirement: Application code, tests, evaluation scripts and data share
+  the repository root, and pyproject.toml lists modules by hand. v0.7b adds a
+  generator, a database and access functions, which would deepen the clutter.
+Options considered: Keep the flat layout; package at the repository root
+  (fintrace/); src/fintrace/ (Python Packaging User Guide, pytest good practices).
+Choice and reasoning: src/fintrace/. Tests run against the installed package, not
+  the working directory, so packaging and import errors show up in development.
+  Development uses an editable install: pip install -e ".[dev]".
+Trade-offs and evidence: A one-time migration of imports, paths and README
+  commands. Kept deliberately small: one flat package, no subpackages, no
+  interfaces, no compatibility shims.
+Revisit when: v0.10 architecture assessment shows real coupling that a different
+  structure would reduce.
+```
+
+Migration constraints:
+
+- Package discovery in `pyproject.toml` changes from `py-modules` to `src` discovery; evaluation and test scripts are not packaged.
+- HTTP contracts of `/compare` and `/investigate` are unchanged; the server is started as `uvicorn fintrace.api:app`.
+- CLI: `main.py` becomes `src/fintrace/compare.py` and is run with `python -m fintrace.compare`; no console-script entry point until a second command needs one.
+- v0.7 evaluation provenance is preserved: `eval_results/v0_7_results.json` stays byte-identical, and the README records the commit (`8e528bf`) whose `eval_cases.py` and `llm_investigation.py` match the recorded `source_sha256`, because the move changes those files' imports.
+- Path-relative code (`RESULTS_PATH`, `_sha256`, CSV locations) is updated to the new locations and verified.
+- Verification: imports, CLI behaviour, FastAPI startup, and the full offline test suite, all from a fresh editable install.
+
+Keep / Replace / Retire / Remove for the migration:
+
+| Item | Decision |
+| --- | --- |
+| `investigation`, `llm_investigation`, `gemini_adapter`, `api` | **Keep**: same code, moved into `src/fintrace/`, imports updated |
+| `main.py` | **Replace** with `src/fintrace/compare.py`; consumers `api.py`, `test_main.py` and README commands migrated |
+| Tests, `eval_cases.py`, `run_eval.py`, CSV data | **Keep**: moved to `tests/`, `evals/`, `data/`; paths and imports updated |
+| `py-modules` setting, `uvicorn api:app` and old paths in README | **Remove** once migrated |
+| Retire | None: there is no consumer that needs the old layout, so no transition shim |
 
 ### ADR: Product direction is an investigation agent
 
