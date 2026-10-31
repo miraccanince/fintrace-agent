@@ -287,6 +287,18 @@ def test_malformed_steps_stop_the_run(world, step):
     assert report["finding"] is None and report["tool_calls"]["agent_requested"] == 0
 
 
+def test_invalid_step_reason_is_kept_in_the_trace(world):
+    with_reason = run_scripted(world, "S1", [{"type": "invalid", "reason": "expected exactly one function call, got 2"}])
+    without = run_scripted(world, "S1", ["not a step"])
+
+    assert with_reason["trace"][0] == {
+        "seq": 1, "origin": "agent", "tool": None, "arguments": None, "outcome": "invalid_step",
+        "reason": "expected exactly one function call, got 2"}
+    assert "neither a tool call nor a final answer" in without["trace"][0]["reason"]
+    for report in (with_reason, without):
+        assert report["stop_reason"] == "invalid_model_output" and report["tool_calls"]["agent_requested"] == 0
+
+
 # --- final answer validation -------------------------------------------------------
 
 

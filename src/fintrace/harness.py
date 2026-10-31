@@ -222,6 +222,11 @@ def run_investigation(
 
         kind = _step_kind(step)
         if kind is None:
+            reason = step.get("reason") if isinstance(step, dict) else None
+            trace.append({
+                "seq": len(trace) + 1, "origin": "agent", "tool": None, "arguments": None, "outcome": "invalid_step",
+                "reason": reason if isinstance(reason, str) else "step is neither a tool call nor a final answer",
+            })
             stop_reason = INVALID_MODEL_OUTPUT
             break
         if kind == "final":
