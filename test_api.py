@@ -14,6 +14,7 @@ def _finding(**overrides):
         "explanation": "risk_system recorded a matching payment; correlation only.",
         "evidence_references": ["transaction:0", "system_update:0"],
         "requires_human_review": True,
+        "hypothesis": None,
     }
     defaults.update(overrides)
     return SimpleNamespace(**defaults)
@@ -248,3 +249,51 @@ def test_investigate_endpoint_forces_requires_human_review_true():
 
     assert response.status_code == 200
     assert response.json()["requires_human_review"] is True
+
+
+LN_1001_REQUEST = {
+    "loan_id": "LN-1001",
+    "amount_a": "150000",
+    "amount_b": "135000",
+    "system_a": "loan_system",
+    "system_b": "risk_system",
+}
+
+
+def test_investigate_endpoint_returns_labelled_ai_hypothesis():
+    hypothesis = SimpleNamespace(
+        kind="conflicting_evidence",
+        summary="test hypothesis",
+        evidence_references=["transaction:0", "system_update:0"],
+    )
+    app.dependency_overrides[get_llm_generate_finding] = lambda: (
+        lambda prompt: _finding(hypothesis=hypothesis)
+    )
+    try:
+        response = client.post("/investigate", json=LN_1001_REQUEST)
+    finally:
+        app.dependency_overrides.pop(get_llm_generate_finding, None)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["finding"] == "possible_explanation"
+    assert body["ai_hypothesis"]["kind"] == "conflicting_evidence"
+    assert body["ai_hypothesis"]["status"] == "not_checkable"
+    assert body["requires_human_review"] is True
+
+
+def test_investigate_endpoint_returns_502_for_fabricated_hypothesis_reference():
+    hypothesis = SimpleNamespace(
+        kind="conflicting_evidence",
+        summary="test hypothesis",
+        evidence_references=["transaction:0", "transaction:42"],
+    )
+    app.dependency_overrides[get_llm_generate_finding] = lambda: (
+        lambda prompt: _finding(hypothesis=hypothesis)
+    )
+    try:
+        response = client.post("/investigate", json=LN_1001_REQUEST)
+    finally:
+        app.dependency_overrides.pop(get_llm_generate_finding, None)
+
+    assert response.status_code == 502

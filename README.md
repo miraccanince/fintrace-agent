@@ -102,6 +102,25 @@ Five held-out synthetic cases (`eval_cases.py`, loan ids `LN-7001`..`LN-7005`, n
 
 Notable: case 5 included three decoy transactions (wrong system, wrong type, wrong amount) alongside one fully-correct one; the model cited only the correct one. Cases 3/4 (amount matches but wrong system / wrong type) were correctly called `insufficient_evidence`, not a naive amount-only match. The one "non-traceable" case (case 1) wasn't a wrong citation — the model additionally cited a legitimate contextual `system_update`, which the evaluation's exact-set-equality metric penalized; that's a limitation of the metric, not evidence of a bad citation. No guardrail intervention occurred in this run, so this evaluation didn't exercise that safety net - only `/investigate`'s unit tests (with a fake, deliberately-violating callable) do.
 
+### v0.7 hypothesis evaluation (`run_eval.py`, 2026-10-31)
+
+Ten cases (five new held-out, five v0.6 regression) against `gemini-3.8-flash`, raw results in `eval_results/v0_7_results.json`. The corrected summary is `eval_results/v0_7_summary.json`, recomputed offline with `python run_eval.py --rescore`; the `summary` embedded in the raw file predates two metric fixes (hypotheses counted across both case groups, true median latency) and should not be quoted.
+
+| Metric | Result |
+| --- | --- |
+| Expected hypothesis proposed (held-out) | 3/3 |
+| Hypothesis citations valid / Python status as expected (held-out) | 3/3 / 5/5 |
+| Hypotheses across all 10 cases: expected / unexpected but plausible / unsupported | 3 / 1 / 1 |
+| Finding preserved, guardrail interventions | 10/10, 0/10 |
+| Median latency | 87.9 s (min 17.1, max 118.9), one retry |
+
+Known weaknesses, not yet fixed:
+
+- `v07-3`: the explanation ignores the reversal that the model's own hypothesis identifies.
+- `v07-2`: the explanation gives the wrong reason for the baseline result, and the hypothesis states that `risk_system` synced after the payment, which Python does not verify (it only checks the higher-balance system's latest update).
+- `v06-3`: an unsupported synchronization hypothesis, correctly labelled `inconsistent_with_cited_evidence` by Python.
+- `manual_review` is still empty in every row; a deterministic rule alternative exists for all three discovered hypotheses, so no analytical advantage over rules is shown.
+
 ## Testing
 
 ```bash
@@ -114,7 +133,7 @@ pytest
 - No authentication on the API.
 - `/compare` accepts raw request bodies only; there is no endpoint to compare files already on the server.
 - `/investigate`'s evidence (`investigation.py`'s `TRANSACTIONS`/`SYSTEM_UPDATES`) is a small, fixed, synthetic dataset — not a real transaction source.
-- `/investigate` has been exercised against a **single** live Gemini call (see Live verification above) — not a broad or repeated check. The pytest suite (52 tests) still runs entirely offline against a fake `generate_finding` callable.
+- `/investigate` has been exercised against a **single** live Gemini call (see Live verification above) — not a broad or repeated check. The pytest suite (81 tests) still runs entirely offline against a fake `generate_finding` callable.
 - The 5-case v0.6 evaluation is a single run, no retries/sampling across multiple calls per case to check consistency, and it happened to produce zero guardrail interventions — the upgrade-blocking guardrail itself is only exercised by `test_llm_investigation.py`'s deliberately-violating fake callables, not by a real model response in this repo.
 - The v0.6 evidence-traceability metric uses exact set equality between cited and expected references, which penalizes a model response that cites correct *additional* context (as case 1 did) the same as one that cites something wrong — a stricter "citations include expected, and extras are plausible context" check would be more accurate but wasn't built to keep this increment small.
 - `gemini-2.0-flash` (this adapter's original default) was shut down by Google. The current default, `gemini-3.8-flash`, and its free-tier + structured-output support were confirmed by fetching `ai.google.dev/gemini-api/docs/models`, `.../structured-output`, and `.../pricing` on 2026-10-31 — confirmed against Google's docs, not against a live call.

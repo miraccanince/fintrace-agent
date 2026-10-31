@@ -12,12 +12,34 @@ class InvalidLLMFinding(ValueError):
     this as an upstream (LLM) failure, not a client input error."""
 
 
+HYPOTHESIS_KINDS = (
+    "combined_partial_payments",
+    "synchronization_timing",
+    "conflicting_evidence",
+)
+
+CONSISTENT = "consistent_with_cited_evidence"
+INCONSISTENT = "inconsistent_with_cited_evidence"
+NOT_CHECKABLE = "not_checkable"
+
+
+class Hypothesis(BaseModel):
+    kind: Literal[
+        "combined_partial_payments",
+        "synchronization_timing",
+        "conflicting_evidence",
+    ]
+    summary: str
+    evidence_references: list[str]
+
+
 class LLMInvestigationFinding(BaseModel):
     loan_id: str
     finding: Literal["possible_explanation", "insufficient_evidence"]
     explanation: str
     evidence_references: list[str]
     requires_human_review: bool
+    hypothesis: Hypothesis | None = None
 
 
 def _build_evidence_context(loan_id: str) -> tuple[str, list[dict], list[dict]]:
@@ -42,6 +64,26 @@ def _build_evidence_context(loan_id: str) -> tuple[str, list[dict], list[dict]]:
     return "\n".join(lines), transactions, system_updates
 
 
+def _resolve_references(
+    references: list[str],
+    transactions: list[dict],
+    system_updates: list[dict],
+) -> tuple[list[dict], list[dict]]:
+    """Return the cited records; any reference to a record that was not
+    retrieved is a fabricated citation and raises InvalidLLMFinding."""
+    cited_transactions = []
+    cited_updates = []
+    for reference in references:
+        kind, _, index_str = reference.partition(":")
+        if kind == "transaction" and index_str.isdigit() and int(index_str) < len(transactions):
+            cited_transactions.append(transactions[int(index_str)])
+        elif kind == "system_update" and index_str.isdigit() and int(index_str) < len(system_updates):
+            cited_updates.append(system_updates[int(index_str)])
+        else:
+            raise InvalidLLMFinding(f"unsupported evidence reference: {reference!r}")
+    return cited_transactions, cited_updates
+
+
 def _validate_llm_result(
     result: LLMInvestigationFinding,
     loan_id: str,
@@ -58,24 +100,90 @@ def _validate_llm_result(
     if result.finding not in ("possible_explanation", "insufficient_evidence"):
         raise InvalidLLMFinding(f"unsupported finding: {result.finding!r}")
 
-    for reference in result.evidence_references:
-        kind, _, index_str = reference.partition(":")
-        if kind == "transaction" and index_str.isdigit():
-            if int(index_str) < len(transactions):
-                continue
-        elif kind == "system_update" and index_str.isdigit():
-            if int(index_str) < len(system_updates):
-                continue
-        raise InvalidLLMFinding(f"unsupported evidence reference: {reference!r}")
+    _resolve_references(result.evidence_references, transactions, system_updates)
+
+    if result.hypothesis is not None:
+        if result.hypothesis.kind not in HYPOTHESIS_KINDS:
+            raise InvalidLLMFinding(f"unsupported hypothesis kind: {result.hypothesis.kind!r}")
+        _resolve_references(result.hypothesis.evidence_references, transactions, system_updates)
 
     # The deterministic baseline is authoritative: the LLM may agree with it
     # or be more conservative, but it cannot upgrade insufficient_evidence
-    # into possible_explanation on its own authority.
+    # into possible_explanation on its own authority. A hypothesis never
+    # changes this - it is reported separately, not as the finding.
     if baseline_finding == "insufficient_evidence" and result.finding == "possible_explanation":
         raise InvalidLLMFinding(
             "LLM upgraded the deterministic finding from insufficient_evidence "
             "to possible_explanation, which is not permitted"
         )
+
+
+def _check_hypothesis(
+    hypothesis: Hypothesis,
+    baseline: dict,
+    system_a: str,
+    system_b: str,
+    transactions: list[dict],
+    system_updates: list[dict],
+) -> tuple[str, str]:
+    """Check an AI hypothesis against the cited records only.
+
+    A passing check means the hypothesis is consistent with what the cited
+    records state (sums, dates, system identities). It never establishes that
+    the hypothesis is the financial cause of the discrepancy.
+    """
+    references = hypothesis.evidence_references
+    if len(set(references)) != len(references):
+        return INCONSISTENT, "hypothesis cites the same record more than once"
+
+    cited_transactions, cited_updates = _resolve_references(
+        references, transactions, system_updates
+    )
+    target = abs(baseline["difference"])
+    lower = baseline["lower_balance_system"]
+    higher = system_a if lower == system_b else system_b
+
+    if hypothesis.kind == "combined_partial_payments":
+        if len(cited_transactions) < 2:
+            return INCONSISTENT, "combined partial payments need at least two cited transactions"
+        if any(t["type"] != "payment" or t["system"] != lower for t in cited_transactions):
+            return INCONSISTENT, f"every cited transaction must be a payment recorded in {lower}"
+        total = sum((t["amount"] for t in cited_transactions), Decimal("0"))
+        if total != target:
+            return INCONSISTENT, f"cited payments sum to {total}, not the discrepancy of {target}"
+        return CONSISTENT, (
+            f"{len(cited_transactions)} cited payments in {lower} sum to {target}; "
+            f"arithmetic consistency only, not proof of cause"
+        )
+
+    if hypothesis.kind == "synchronization_timing":
+        matching = [t for t in cited_transactions if t["type"] == "payment" and t["amount"] == target]
+        if len(matching) != 1:
+            return INCONSISTENT, f"hypothesis must cite exactly one payment of {target}"
+        if matching[0]["system"] == higher:
+            return INCONSISTENT, (
+                f"the payment is recorded in {higher} itself, so it cannot be a "
+                f"change {higher} has not yet synchronized"
+            )
+        if not any(u["system"] == higher for u in cited_updates):
+            return INCONSISTENT, f"hypothesis cites no update recorded for {higher}"
+        # Judge against every recorded update for that system, not only the
+        # cited ones: a later update the model left out would contradict it.
+        latest_update = max(u["date"] for u in system_updates if u["system"] == higher)
+        payment_date = matching[0]["date"]
+        if latest_update >= payment_date:
+            return INCONSISTENT, (
+                f"{higher} has an update on {latest_update}, not before the "
+                f"payment on {payment_date}"
+            )
+        return CONSISTENT, (
+            f"{higher}'s latest recorded update ({latest_update}) precedes the "
+            f"cited payment ({payment_date}); timestamps show order only, not cause"
+        )
+
+    if len(references) < 2:
+        return INCONSISTENT, "conflicting evidence needs at least two cited records"
+    return NOT_CHECKABLE, "no deterministic check exists for conflicting evidence; review the cited records"
 
 
 def generate_llm_finding(
@@ -102,6 +210,9 @@ def generate_llm_finding(
 
     `requires_human_review` is always `True` in the returned result - this
     is a Python-enforced policy, not something the LLM decides.
+
+    An optional AI hypothesis is returned separately as `ai_hypothesis`,
+    with a Python-assigned `status`; it never changes `finding`.
     """
     baseline = investigate_discrepancy(loan_id, amount_a, amount_b, system_a, system_b)
 
@@ -123,12 +234,33 @@ def generate_llm_finding(
         f"possible_explanation if the baseline is insufficient_evidence. "
         f"Never conclude the discrepancy is confirmed - a matching amount is "
         f"correlation, not proof. Cite only the reference ids shown above "
-        f"(e.g. 'transaction:0') in evidence_references."
+        f"(e.g. 'transaction:0') in evidence_references.\n\n"
+        f"Separately, you may propose at most one candidate hypothesis the "
+        f"deterministic rule may have missed: a kind (combined_partial_payments, "
+        f"synchronization_timing or conflicting_evidence), a short summary, and "
+        f"the reference ids it relies on. A hypothesis is an unverified "
+        f"candidate for a human analyst, not a financial conclusion, and it "
+        f"does not change the finding. Propose one only if the cited records "
+        f"directly support it; otherwise set hypothesis to null, which is the "
+        f"expected answer when nothing fits."
     )
 
     result = generate_finding(prompt)
 
     _validate_llm_result(result, loan_id, baseline["finding"], transactions, system_updates)
+
+    ai_hypothesis = None
+    if result.hypothesis is not None:
+        status, status_reason = _check_hypothesis(
+            result.hypothesis, baseline, system_a, system_b, transactions, system_updates
+        )
+        ai_hypothesis = {
+            "kind": result.hypothesis.kind,
+            "summary": result.hypothesis.summary,
+            "evidence_references": result.hypothesis.evidence_references,
+            "status": status,
+            "status_reason": status_reason,
+        }
 
     return {
         "loan_id": result.loan_id,
@@ -140,4 +272,5 @@ def generate_llm_finding(
         # what the model itself reports here.
         "requires_human_review": True,
         "deterministic_finding": baseline["finding"],
+        "ai_hypothesis": ai_hypothesis,
     }

@@ -1,0 +1,30 @@
+{
+  "source_results": "v0_7_results.json",
+  "summary": {
+    "held_out": {
+      "hypothesis_discovered": "3/3",
+      "hypothesis_citations_valid": "3/3",
+      "status_matches_expected": "5/5",
+      "finding_preserved": "5/5",
+      "guardrail_interventions": "0/5"
+    },
+    "regression": {
+      "finding_correct": "5/5",
+      "finding_citations_valid": "5/5",
+      "finding_preserved": "5/5",
+      "guardrail_interventions": "0/5"
+    },
+    "hypotheses": {
+      "expected": "3/10",
+      "unexpected_plausible": "1/10",
+      "unsupported": "1/10"
+    },
+    "run": {
+      "api_failures": "0/10",
+      "total_retries": 1,
+      "latency_seconds_min": 17.1,
+      "latency_seconds_median": 87.855,
+      "latency_seconds_max": 118.86
+    }
+  }
+}

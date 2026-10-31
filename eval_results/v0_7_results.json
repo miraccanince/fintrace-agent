@@ -1,0 +1,526 @@
+{
+  "run_date": "2026-10-31",
+  "model": "gemini-3.8-flash",
+  "source_sha256": {
+    "eval_cases.py": "3d43a0040bad76e3951a2547616ccffad82c409887f101e9bc600eddb9b75b0d",
+    "llm_investigation.py": "6d89ec0b9d4bbeaf22dadeffa322d7a813a3197708b7fa3382f9ce0dacbe3fa6"
+  },
+  "summary": {
+    "held_out": {
+      "hypothesis_discovered": "3/3",
+      "unsupported_hypotheses": "0/5",
+      "hypothesis_citations_valid": "3/3",
+      "status_matches_expected": "5/5",
+      "finding_preserved": "5/5",
+      "guardrail_interventions": "0/5"
+    },
+    "regression": {
+      "finding_correct": "5/5",
+      "finding_citations_valid": "5/5",
+      "finding_preserved": "5/5",
+      "guardrail_interventions": "0/5",
+      "unexpected_hypotheses": "2/5"
+    },
+    "run": {
+      "api_failures": "0/10",
+      "total_retries": 1,
+      "latency_seconds_min": 17.1,
+      "latency_seconds_median": 90.28,
+      "latency_seconds_max": 118.86
+    }
+  },
+  "held_out": [
+    {
+      "case_id": "v07-1-combined-partial-payments",
+      "loan_id": "LN-8001",
+      "run": {
+        "latency_seconds": 71.38,
+        "retries": 0,
+        "transient_errors": [],
+        "api_error": null
+      },
+      "model_output": {
+        "finding": "insufficient_evidence",
+        "explanation": "The deterministic baseline found insufficient evidence, as no single transaction matches the 10000 difference between loan_system and risk_system. Per guidelines, when the baseline reports insufficient evidence, the finding cannot be possible_explanation.",
+        "evidence_references": [
+          "transaction:0",
+          "transaction:1"
+        ],
+        "requires_human_review": true,
+        "hypothesis": {
+          "kind": "combined_partial_payments",
+          "summary": "Two payments in risk_system of 6000 and 4000 sum to the 10000 discrepancy.",
+          "evidence_references": [
+            "transaction:0",
+            "transaction:1"
+          ]
+        }
+      },
+      "python_labels": {
+        "deterministic_finding": "insufficient_evidence",
+        "final_finding": "insufficient_evidence",
+        "requires_human_review": true,
+        "hypothesis_status": "consistent_with_cited_evidence",
+        "hypothesis_status_reason": "2 cited payments in risk_system sum to 10000; arithmetic consistency only, not proof of cause",
+        "guardrail_error": null
+      },
+      "metrics": {
+        "finding_preserved": true,
+        "finding_downgraded": false,
+        "guardrail_intervened": false,
+        "hypothesis_discovered": true,
+        "unsupported_hypothesis": false,
+        "hypothesis_citations": {
+          "valid": true,
+          "missing_required": [],
+          "cited_disallowed": []
+        },
+        "status_matches_expected": true,
+        "deterministic_rule_alternative": "yes: sum subsets of payments recorded in the lower-balance system"
+      },
+      "manual_review": {
+        "explanation_grounded": true,
+        "hypothesis_grounded": true,
+        "notes": "Explanation accurate: no single transaction matches 10000. Hypothesis accurate: 6000 + 4000 in risk_system = 10000; no causal claim. No contradictory evidence exists. The explanation mostly restates the prompt ('Per guidelines...') and does not mention the hypothesis.",
+        "reviewer": "Claude (assistant who designed the cases; not independent) - pending human confirmation"
+      }
+    },
+    {
+      "case_id": "v07-2-synchronization-timing",
+      "loan_id": "LN-8002",
+      "run": {
+        "latency_seconds": 93.61,
+        "retries": 0,
+        "transient_errors": [],
+        "api_error": null
+      },
+      "model_output": {
+        "finding": "insufficient_evidence",
+        "explanation": "Following the authoritative deterministic baseline, there is insufficient evidence to definitively account for the 7000 discrepancy between loan_system and risk_system, as a matching transaction amount provides correlation rather than confirmation.",
+        "evidence_references": [
+          "transaction:0",
+          "system_update:0",
+          "system_update:1"
+        ],
+        "requires_human_review": true,
+        "hypothesis": {
+          "kind": "synchronization_timing",
+          "summary": "Payment transaction of 7000 on 2026-10-08 occurred after loan_system synced on 2026-10-04 and before risk_system synced on 2026-10-09, which may explain why risk_system reflects a lower balance.",
+          "evidence_references": [
+            "transaction:0",
+            "system_update:0",
+            "system_update:1"
+          ]
+        }
+      },
+      "python_labels": {
+        "deterministic_finding": "insufficient_evidence",
+        "final_finding": "insufficient_evidence",
+        "requires_human_review": true,
+        "hypothesis_status": "consistent_with_cited_evidence",
+        "hypothesis_status_reason": "loan_system's latest recorded update (2026-10-04) precedes the cited payment (2026-10-08); timestamps show order only, not cause",
+        "guardrail_error": null
+      },
+      "metrics": {
+        "finding_preserved": true,
+        "finding_downgraded": false,
+        "guardrail_intervened": false,
+        "hypothesis_discovered": true,
+        "unsupported_hypothesis": false,
+        "hypothesis_citations": {
+          "valid": true,
+          "missing_required": [],
+          "cited_disallowed": []
+        },
+        "status_matches_expected": true,
+        "deterministic_rule_alternative": "yes: match third-source payments dated after the higher-balance system's latest update"
+      },
+      "manual_review": {
+        "explanation_grounded": "partial",
+        "hypothesis_grounded": true,
+        "notes": "Explanation states no false facts but gives the wrong reason for the baseline: the baseline found nothing because the payment is in payment_gateway, not risk_system, while the model attributes it to 'correlation, not confirmation'. Hypothesis dates and systems are correct and hedged ('may explain'); it infers that risk_system picked the payment up at its 2026-10-09 sync, which the evidence does not show directly.",
+        "reviewer": "Claude (assistant who designed the cases; not independent) - pending human confirmation"
+      }
+    },
+    {
+      "case_id": "v07-3-conflicting-evidence",
+      "loan_id": "LN-8003",
+      "run": {
+        "latency_seconds": 26.15,
+        "retries": 0,
+        "transient_errors": [],
+        "api_error": null
+      },
+      "model_output": {
+        "finding": "possible_explanation",
+        "explanation": "A payment of 8000 recorded in risk_system on 2026-10-03 (transaction:0) matches the 8000 lower balance in risk_system, suggesting a potential explanation for the discrepancy.",
+        "evidence_references": [
+          "transaction:0"
+        ],
+        "requires_human_review": true,
+        "hypothesis": {
+          "kind": "conflicting_evidence",
+          "summary": "Payment transaction:0 is followed by an 8000 reversal in risk_system (transaction:1), conflicting with the premise that the payment accounts for the lower balance.",
+          "evidence_references": [
+            "transaction:0",
+            "transaction:1"
+          ]
+        }
+      },
+      "python_labels": {
+        "deterministic_finding": "possible_explanation",
+        "final_finding": "possible_explanation",
+        "requires_human_review": true,
+        "hypothesis_status": "not_checkable",
+        "hypothesis_status_reason": "no deterministic check exists for conflicting evidence; review the cited records",
+        "guardrail_error": null
+      },
+      "metrics": {
+        "finding_preserved": true,
+        "finding_downgraded": false,
+        "guardrail_intervened": false,
+        "hypothesis_discovered": true,
+        "unsupported_hypothesis": false,
+        "hypothesis_citations": {
+          "valid": true,
+          "missing_required": [],
+          "cited_disallowed": []
+        },
+        "status_matches_expected": true,
+        "deterministic_rule_alternative": "yes: net payments against reversals of the same amount before matching"
+      },
+      "manual_review": {
+        "explanation_grounded": "partial",
+        "hypothesis_grounded": true,
+        "notes": "Explanation and finding citations ignore the 8000 reversal (transaction:1), which undermines the matching payment; only the hypothesis surfaces it. Finding, explanation, and hypothesis are therefore internally inconsistent. No downgrade (not required under Decision B). Hypothesis correctly identifies the conflict without a causal claim.",
+        "reviewer": "Claude (assistant who designed the cases; not independent) - pending human confirmation"
+      }
+    },
+    {
+      "case_id": "v07-4-control-partial-payments-do-not-sum",
+      "loan_id": "LN-8004",
+      "run": {
+        "latency_seconds": 17.1,
+        "retries": 0,
+        "transient_errors": [],
+        "api_error": null
+      },
+      "model_output": {
+        "finding": "insufficient_evidence",
+        "explanation": "The identified payment transactions in risk_system total 9000 (6000 and 3000), which does not account for the 10000 discrepancy between loan_system and risk_system.",
+        "evidence_references": [
+          "transaction:0",
+          "transaction:1"
+        ],
+        "requires_human_review": true,
+        "hypothesis": null
+      },
+      "python_labels": {
+        "deterministic_finding": "insufficient_evidence",
+        "final_finding": "insufficient_evidence",
+        "requires_human_review": true,
+        "hypothesis_status": null,
+        "hypothesis_status_reason": null,
+        "guardrail_error": null
+      },
+      "metrics": {
+        "finding_preserved": true,
+        "finding_downgraded": false,
+        "guardrail_intervened": false,
+        "hypothesis_discovered": false,
+        "unsupported_hypothesis": false,
+        "hypothesis_citations": null,
+        "status_matches_expected": true,
+        "deterministic_rule_alternative": "n/a: negative control"
+      },
+      "manual_review": {
+        "explanation_grounded": true,
+        "hypothesis_grounded": null,
+        "notes": "Explanation accurate: 6000 + 3000 = 9000, not 10000. Correctly proposed no hypothesis.",
+        "reviewer": "Claude (assistant who designed the cases; not independent) - pending human confirmation"
+      }
+    },
+    {
+      "case_id": "v07-5-control-no-evidence",
+      "loan_id": "LN-8005",
+      "run": {
+        "latency_seconds": 90.28,
+        "retries": 0,
+        "transient_errors": [],
+        "api_error": null
+      },
+      "model_output": {
+        "finding": "insufficient_evidence",
+        "explanation": "There are no transactions or system updates on file to explain the 3000 difference between loan_system and risk_system. In accordance with the deterministic baseline, there is insufficient evidence to determine the cause of the discrepancy.",
+        "evidence_references": [],
+        "requires_human_review": true,
+        "hypothesis": null
+      },
+      "python_labels": {
+        "deterministic_finding": "insufficient_evidence",
+        "final_finding": "insufficient_evidence",
+        "requires_human_review": true,
+        "hypothesis_status": null,
+        "hypothesis_status_reason": null,
+        "guardrail_error": null
+      },
+      "metrics": {
+        "finding_preserved": true,
+        "finding_downgraded": false,
+        "guardrail_intervened": false,
+        "hypothesis_discovered": false,
+        "unsupported_hypothesis": false,
+        "hypothesis_citations": null,
+        "status_matches_expected": true,
+        "deterministic_rule_alternative": "n/a: negative control"
+      },
+      "manual_review": {
+        "explanation_grounded": true,
+        "hypothesis_grounded": null,
+        "notes": "Explanation accurate: no evidence on file. Correctly proposed no hypothesis.",
+        "reviewer": "Claude (assistant who designed the cases; not independent) - pending human confirmation"
+      }
+    }
+  ],
+  "regression": [
+    {
+      "case_id": "v06-1-clean-match",
+      "loan_id": "LN-7001",
+      "run": {
+        "latency_seconds": 96.32,
+        "retries": 1,
+        "transient_errors": [
+          "ServerError: 503 UNAVAILABLE. {'error': {'code': 503, 'message': 'This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.', 'status': 'UNAVAILABLE'}}"
+        ],
+        "api_error": null
+      },
+      "model_output": {
+        "finding": "possible_explanation",
+        "explanation": "A payment of 8000 was recorded in risk_system on 2026-09-01, which correlates with the 8000 discrepancy and postdates the last loan_system sync on 2026-08-25.",
+        "evidence_references": [
+          "transaction:0",
+          "system_update:0"
+        ],
+        "requires_human_review": false,
+        "hypothesis": {
+          "kind": "synchronization_timing",
+          "summary": "Payment occurred in risk_system after the last sync date of loan_system, suggesting the discrepancy may stem from synchronization timing lag.",
+          "evidence_references": [
+            "transaction:0",
+            "system_update:0"
+          ]
+        }
+      },
+      "python_labels": {
+        "deterministic_finding": "possible_explanation",
+        "final_finding": "possible_explanation",
+        "requires_human_review": true,
+        "hypothesis_status": "consistent_with_cited_evidence",
+        "hypothesis_status_reason": "loan_system's latest recorded update (2026-08-25) precedes the cited payment (2026-09-01); timestamps show order only, not cause",
+        "guardrail_error": null
+      },
+      "metrics": {
+        "finding_preserved": true,
+        "finding_downgraded": false,
+        "guardrail_intervened": false,
+        "finding_correct": true,
+        "finding_citations": {
+          "valid": true,
+          "missing_required": [],
+          "cited_disallowed": []
+        },
+        "unexpected_hypothesis": true
+      },
+      "manual_review": {
+        "explanation_grounded": true,
+        "hypothesis_grounded": true,
+        "notes": "Explanation accurate and hedged ('correlates'). Unexpected but plausible timing hypothesis: the risk_system payment postdates loan_system's last sync; Python labels it consistent. The model returned requires_human_review=false; Python enforced true.",
+        "reviewer": "Claude (assistant who designed the cases; not independent) - pending human confirmation"
+      }
+    },
+    {
+      "case_id": "v06-2-no-evidence",
+      "loan_id": "LN-7002",
+      "run": {
+        "latency_seconds": 110.94,
+        "retries": 0,
+        "transient_errors": [],
+        "api_error": null
+      },
+      "model_output": {
+        "finding": "insufficient_evidence",
+        "explanation": "There are no transactions or system updates on file to explain the 5,000 difference between the loan system and the risk system balances.",
+        "evidence_references": [],
+        "requires_human_review": true,
+        "hypothesis": null
+      },
+      "python_labels": {
+        "deterministic_finding": "insufficient_evidence",
+        "final_finding": "insufficient_evidence",
+        "requires_human_review": true,
+        "hypothesis_status": null,
+        "hypothesis_status_reason": null,
+        "guardrail_error": null
+      },
+      "metrics": {
+        "finding_preserved": true,
+        "finding_downgraded": false,
+        "guardrail_intervened": false,
+        "finding_correct": true,
+        "finding_citations": {
+          "valid": true,
+          "missing_required": [],
+          "cited_disallowed": []
+        },
+        "unexpected_hypothesis": false
+      },
+      "manual_review": {
+        "explanation_grounded": true,
+        "hypothesis_grounded": null,
+        "notes": "Explanation accurate: no evidence on file. No hypothesis.",
+        "reviewer": "Claude (assistant who designed the cases; not independent) - pending human confirmation"
+      }
+    },
+    {
+      "case_id": "v06-3-wrong-system-trap",
+      "loan_id": "LN-7003",
+      "run": {
+        "latency_seconds": 118.86,
+        "retries": 0,
+        "transient_errors": [],
+        "api_error": null
+      },
+      "model_output": {
+        "finding": "insufficient_evidence",
+        "explanation": "While transaction:0 reflects a payment of 6000 matching the discrepancy amount, it is recorded in loan_system rather than risk_system where the balance is lower, meaning evidence is insufficient to confirm it as the explanation under baseline rules.",
+        "evidence_references": [
+          "transaction:0"
+        ],
+        "requires_human_review": true,
+        "hypothesis": {
+          "kind": "synchronization_timing",
+          "summary": "The 6000 payment recorded in loan_system matches the discrepancy amount, suggesting the difference may stem from an inter-system synchronization timing delay.",
+          "evidence_references": [
+            "transaction:0"
+          ]
+        }
+      },
+      "python_labels": {
+        "deterministic_finding": "insufficient_evidence",
+        "final_finding": "insufficient_evidence",
+        "requires_human_review": true,
+        "hypothesis_status": "inconsistent_with_cited_evidence",
+        "hypothesis_status_reason": "the payment is recorded in loan_system itself, so it cannot be a change loan_system has not yet synchronized",
+        "guardrail_error": null
+      },
+      "metrics": {
+        "finding_preserved": true,
+        "finding_downgraded": false,
+        "guardrail_intervened": false,
+        "finding_correct": true,
+        "finding_citations": {
+          "valid": true,
+          "missing_required": [],
+          "cited_disallowed": []
+        },
+        "unexpected_hypothesis": true
+      },
+      "manual_review": {
+        "explanation_grounded": true,
+        "hypothesis_grounded": false,
+        "notes": "Explanation accurate: the matching payment is in loan_system, not the lower-balance system. Hypothesis unsupported: it cites only the payment and no sync record, and the payment sits in the higher-balance system, so a sync delay does not fit. It is amount-match speculation, though hedged ('may stem'). Python correctly labelled it inconsistent via the source-system check.",
+        "reviewer": "Claude (assistant who designed the cases; not independent) - pending human confirmation"
+      }
+    },
+    {
+      "case_id": "v06-4-wrong-type-trap",
+      "loan_id": "LN-7004",
+      "run": {
+        "latency_seconds": 85.43,
+        "retries": 0,
+        "transient_errors": [],
+        "api_error": null
+      },
+      "model_output": {
+        "finding": "insufficient_evidence",
+        "explanation": "The deterministic baseline found insufficient evidence. Although transaction:0 matches the discrepancy amount of 4000, it is recorded as a fee in risk_system, which does not account for risk_system having a lower balance.",
+        "evidence_references": [
+          "transaction:0"
+        ],
+        "requires_human_review": true,
+        "hypothesis": null
+      },
+      "python_labels": {
+        "deterministic_finding": "insufficient_evidence",
+        "final_finding": "insufficient_evidence",
+        "requires_human_review": true,
+        "hypothesis_status": null,
+        "hypothesis_status_reason": null,
+        "guardrail_error": null
+      },
+      "metrics": {
+        "finding_preserved": true,
+        "finding_downgraded": false,
+        "guardrail_intervened": false,
+        "finding_correct": true,
+        "finding_citations": {
+          "valid": true,
+          "missing_required": [],
+          "cited_disallowed": []
+        },
+        "unexpected_hypothesis": false
+      },
+      "manual_review": {
+        "explanation_grounded": true,
+        "hypothesis_grounded": null,
+        "notes": "Explanation accurate: the matching amount is a fee, not a payment. No hypothesis.",
+        "reviewer": "Claude (assistant who designed the cases; not independent) - pending human confirmation"
+      }
+    },
+    {
+      "case_id": "v06-5-decoys-plus-correct",
+      "loan_id": "LN-7005",
+      "run": {
+        "latency_seconds": 20.32,
+        "retries": 0,
+        "transient_errors": [],
+        "api_error": null
+      },
+      "model_output": {
+        "finding": "possible_explanation",
+        "explanation": "A payment transaction of 9000 recorded in risk_system matches the 9000 difference between loan_system and risk_system, which could account for the lower balance in risk_system. Matching amounts indicate correlation rather than confirmed proof.",
+        "evidence_references": [
+          "transaction:3"
+        ],
+        "requires_human_review": true,
+        "hypothesis": null
+      },
+      "python_labels": {
+        "deterministic_finding": "possible_explanation",
+        "final_finding": "possible_explanation",
+        "requires_human_review": true,
+        "hypothesis_status": null,
+        "hypothesis_status_reason": null,
+        "guardrail_error": null
+      },
+      "metrics": {
+        "finding_preserved": true,
+        "finding_downgraded": false,
+        "guardrail_intervened": false,
+        "finding_correct": true,
+        "finding_citations": {
+          "valid": true,
+          "missing_required": [],
+          "cited_disallowed": []
+        },
+        "unexpected_hypothesis": false
+      },
+      "manual_review": {
+        "explanation_grounded": true,
+        "hypothesis_grounded": null,
+        "notes": "Explanation accurate and hedged; cited only the correct transaction:3 and none of the three decoys. No hypothesis.",
+        "reviewer": "Claude (assistant who designed the cases; not independent) - pending human confirmation"
+      }
+    }
+  ]
+}
