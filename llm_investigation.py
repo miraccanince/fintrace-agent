@@ -97,6 +97,9 @@ def generate_llm_finding(
     schema itself only allows `possible_explanation` or
     `insufficient_evidence` (never `confirmed`). `client` is injected so
     tests can run fully offline.
+
+    `requires_human_review` is always `True` in the returned result - this
+    is a Python-enforced policy, not something the LLM decides.
     """
     baseline = investigate_discrepancy(loan_id, amount_a, amount_b, system_a, system_b)
 
@@ -108,13 +111,22 @@ def generate_llm_finding(
         client = anthropic.Anthropic()
 
     prompt = (
+        f"Loan {loan_id} discrepancy:\n"
+        f"- {system_a} reports outstanding_amount={amount_a}\n"
+        f"- {system_b} reports outstanding_amount={amount_b}\n"
+        f"- difference ({system_a} - {system_b}) = {baseline['difference']}\n"
+        f"- the lower balance is in {baseline['lower_balance_system']}, which "
+        f"is the system expected to already reflect a reducing transaction\n"
+        f"- deterministic baseline finding: {baseline['finding']}\n\n"
         f"{evidence_context}\n\n"
-        f"The loan systems disagree on loan {loan_id}'s balance. Using only "
-        f"the evidence above, decide whether it is a possible_explanation or "
-        f"there is insufficient_evidence. Never conclude the discrepancy is "
-        f"confirmed - a matching amount is correlation, not proof. Cite only "
-        f"the reference ids shown above (e.g. 'transaction:0') in "
-        f"evidence_references."
+        f"Using only the evidence above, decide whether it is a "
+        f"possible_explanation or there is insufficient_evidence. The "
+        f"deterministic baseline is authoritative: you may agree with it or "
+        f"be more conservative, but you may never report "
+        f"possible_explanation if the baseline is insufficient_evidence. "
+        f"Never conclude the discrepancy is confirmed - a matching amount is "
+        f"correlation, not proof. Cite only the reference ids shown above "
+        f"(e.g. 'transaction:0') in evidence_references."
     )
 
     response = client.messages.parse(
@@ -132,6 +144,9 @@ def generate_llm_finding(
         "finding": result.finding,
         "explanation": result.explanation,
         "evidence_references": result.evidence_references,
-        "requires_human_review": result.requires_human_review,
+        # Always True by policy, decided in Python - an LLM-assisted finding
+        # is never auto-applied without a human looking at it, regardless of
+        # what the model itself reports here.
+        "requires_human_review": True,
         "deterministic_finding": baseline["finding"],
     }

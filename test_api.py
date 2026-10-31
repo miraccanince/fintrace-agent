@@ -239,3 +239,25 @@ def test_investigate_endpoint_returns_422_for_equal_amounts():
         app.dependency_overrides.pop(get_llm_client, None)
 
     assert response.status_code == 422
+
+
+def test_investigate_endpoint_forces_requires_human_review_true():
+    app.dependency_overrides[get_llm_client] = lambda: FakeClient(
+        _finding(requires_human_review=False)
+    )
+    try:
+        response = client.post(
+            "/investigate",
+            json={
+                "loan_id": "LN-1001",
+                "amount_a": "150000",
+                "amount_b": "135000",
+                "system_a": "loan_system",
+                "system_b": "risk_system",
+            },
+        )
+    finally:
+        app.dependency_overrides.pop(get_llm_client, None)
+
+    assert response.status_code == 200
+    assert response.json()["requires_human_review"] is True

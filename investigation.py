@@ -110,4 +110,6 @@ def investigate_discrepancy(
         "explanation": explanation,
         "supporting_transactions": supporting_transactions,
         "related_system_updates": related_system_updates,
+        "difference": difference,
+        "lower_balance_system": lower_balance_system,
     }

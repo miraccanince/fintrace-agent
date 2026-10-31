@@ -48,6 +48,40 @@ Then `POST /compare` with a JSON body:
 }
 ```
 
+### LLM-assisted investigation (`/investigate`)
+
+For a loan with a discrepancy, `POST /investigate` asks an LLM to interpret the same synthetic transaction/system-update evidence a deterministic rule in `investigation.py` already looked at, and returns a structured, evidence-grounded finding:
+
+```json
+{
+  "loan_id": "LN-1001",
+  "amount_a": "150000",
+  "amount_b": "135000",
+  "system_a": "loan_system",
+  "system_b": "risk_system"
+}
+```
+
+Response:
+
+```json
+{
+  "loan_id": "LN-1001",
+  "finding": "possible_explanation",
+  "explanation": "...",
+  "evidence_references": ["transaction:0", "system_update:0"],
+  "requires_human_review": true,
+  "deterministic_finding": "possible_explanation"
+}
+```
+
+Requires `ANTHROPIC_API_KEY` in the environment. Guardrails, all enforced in Python, not left to the model:
+
+- `finding` can only be `possible_explanation` or `insufficient_evidence` — the response schema itself has no `confirmed` option.
+- The deterministic baseline (`investigate_discrepancy`) is computed first and is authoritative: the LLM cannot upgrade an `insufficient_evidence` baseline into `possible_explanation`. Violating this, or citing an `evidence_references` id that wasn't actually retrieved, returns **502** (an invalid LLM-generated result, not a client error).
+- `requires_human_review` is always `true` in the response, regardless of what the model reports — no finding is ever treated as auto-applied.
+- Equal `amount_a`/`amount_b` (nothing to investigate) returns **422**.
+
 ## Testing
 
 ```bash
@@ -59,4 +93,6 @@ pytest
 - No persistence or database — everything runs in memory per call.
 - No authentication on the API.
 - `/compare` accepts raw request bodies only; there is no endpoint to compare files already on the server.
-- No AI-assisted investigation yet (under evaluation for a future increment; not guaranteed to be added — see internal roadmap).
+- `/investigate`'s evidence (`investigation.py`'s `TRANSACTIONS`/`SYSTEM_UPDATES`) is a small, fixed, synthetic dataset — not a real transaction source.
+- `/investigate` is tested entirely offline with a fake LLM client; it has not been exercised against a live Anthropic API call in this repo.
+- `/investigate` only supports Anthropic's Claude via `output_config.format` structured outputs — no other LLM provider yet.

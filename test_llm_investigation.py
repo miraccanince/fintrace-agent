@@ -122,6 +122,50 @@ def test_llm_agreeing_with_insufficient_evidence_baseline_is_accepted():
     assert result["deterministic_finding"] == "insufficient_evidence"
 
 
+def test_requires_human_review_is_always_true_regardless_of_llm_output():
+    client = FakeClient(_finding(requires_human_review=False))
+
+    result = generate_llm_finding(
+        "LN-1001",
+        amount_a=Decimal("150000"),
+        amount_b=Decimal("135000"),
+        system_a="loan_system",
+        system_b="risk_system",
+        client=client,
+    )
+
+    assert result["requires_human_review"] is True
+
+
+def test_prompt_includes_amounts_systems_direction_and_baseline():
+    captured_kwargs = {}
+
+    class RecordingMessages(FakeMessages):
+        def parse(self, **kwargs):
+            captured_kwargs.update(kwargs)
+            return super().parse(**kwargs)
+
+    client = FakeClient(_finding())
+    client.messages = RecordingMessages(_finding())
+
+    generate_llm_finding(
+        "LN-1001",
+        amount_a=Decimal("150000"),
+        amount_b=Decimal("135000"),
+        system_a="loan_system",
+        system_b="risk_system",
+        client=client,
+    )
+
+    prompt = captured_kwargs["messages"][0]["content"]
+    assert "150000" in prompt
+    assert "135000" in prompt
+    assert "loan_system" in prompt
+    assert "risk_system" in prompt
+    assert "15000" in prompt  # the difference
+    assert "deterministic baseline finding: possible_explanation" in prompt
+
+
 def test_loan_id_mismatch_in_llm_response_is_rejected():
     client = FakeClient(_finding(loan_id="LN-9999"))
 
