@@ -1,4 +1,23 @@
 import csv
+import os
+from decimal import Decimal, InvalidOperation
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def parse_amount(value):
+    """Convert a string amount (e.g. from CSV or JSON) to Decimal.
+
+    Non-string values (already-parsed int/float/Decimal, or None) pass
+    through unchanged; malformed strings pass through unchanged too, so
+    `_malformed_reason` can report them instead of raising here.
+    """
+    if isinstance(value, str):
+        try:
+            return Decimal(value)
+        except InvalidOperation:
+            return value
+    return value
 
 
 def load_loans_from_csv(path: str) -> list[dict]:
@@ -8,14 +27,7 @@ def load_loans_from_csv(path: str) -> list[dict]:
     loans = []
     for row in rows:
         loan = dict(row)
-        amount = loan.get("outstanding_amount")
-        if amount is not None:
-            try:
-                loan["outstanding_amount"] = (
-                    float(amount) if "." in amount else int(amount)
-                )
-            except ValueError:
-                pass
+        loan["outstanding_amount"] = parse_amount(loan.get("outstanding_amount"))
         loans.append(loan)
 
     return loans
@@ -30,7 +42,7 @@ def _malformed_reason(loan: dict) -> str | None:
         return "currency is not a string"
 
     amount = loan["outstanding_amount"]
-    if isinstance(amount, bool) or not isinstance(amount, (int, float)):
+    if isinstance(amount, bool) or not isinstance(amount, (int, Decimal)):
         return "outstanding_amount is not a number"
 
     return None
@@ -46,7 +58,9 @@ def _compare_matched_pair(loan_a: dict, loan_b: dict) -> dict:
             "difference": None,
         }
 
-    difference = loan_a["outstanding_amount"] - loan_b["outstanding_amount"]
+    difference = Decimal(loan_a["outstanding_amount"]) - Decimal(
+        loan_b["outstanding_amount"]
+    )
     status = "match" if difference == 0 else "discrepancy"
 
     return {
@@ -59,8 +73,16 @@ def _compare_matched_pair(loan_a: dict, loan_b: dict) -> dict:
 def _index_and_validate(
     system: list[dict], label: str
 ) -> tuple[dict, list[dict], set]:
+    occurrence_counts: dict = {}
+    for loan in system:
+        loan_id = loan.get("loan_id")
+        if loan_id:
+            occurrence_counts[loan_id] = occurrence_counts.get(loan_id, 0) + 1
+    duplicate_ids = {
+        loan_id for loan_id, count in occurrence_counts.items() if count > 1
+    }
+
     index: dict = {}
-    duplicate_ids: set = set()
     issues: list[dict] = []
 
     for loan in system:
@@ -77,6 +99,9 @@ def _index_and_validate(
             )
             continue
 
+        if loan_id in duplicate_ids:
+            continue
+
         reason = _malformed_reason(loan)
         if reason is not None:
             issues.append(
@@ -87,11 +112,6 @@ def _index_and_validate(
                     "reason": reason,
                 }
             )
-            continue
-
-        if loan_id in index or loan_id in duplicate_ids:
-            duplicate_ids.add(loan_id)
-            index.pop(loan_id, None)
             continue
 
         index[loan_id] = loan
@@ -136,8 +156,8 @@ def compare_datasets(system_a: list[dict], system_b: list[dict]) -> list[dict]:
 
 
 if __name__ == "__main__":
-    loan_system = load_loans_from_csv("loan_system.csv")
-    risk_system = load_loans_from_csv("risk_system.csv")
+    loan_system = load_loans_from_csv(os.path.join(BASE_DIR, "loan_system.csv"))
+    risk_system = load_loans_from_csv(os.path.join(BASE_DIR, "risk_system.csv"))
 
     for result in compare_datasets(loan_system, risk_system):
         print(result)
