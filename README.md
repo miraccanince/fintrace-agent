@@ -82,6 +82,24 @@ Requires `GEMINI_API_KEY` in the environment (free tier; model defaults to `gemi
 - `requires_human_review` is always `true` in the response, regardless of what the model reports — no finding is ever treated as auto-applied.
 - Equal `amount_a`/`amount_b` (nothing to investigate) returns **422**.
 
+### Live verification (2026-10-31)
+
+A real `/investigate` call against `gemini-3.8-flash` for `LN-1001` (`150000` vs `135000`) succeeded on retry (first attempt hit a transient `503 UNAVAILABLE`): returned `finding: "possible_explanation"`, `requires_human_review: true`, and a `deterministic_finding` matching the baseline, with valid `evidence_references`.
+
+### v0.6 evaluation (`run_eval.py`, not part of pytest — makes real API calls)
+
+Five held-out synthetic cases (`eval_cases.py`, loan ids `LN-7001`..`LN-7005`, never used while writing prompts or tests) were scored against hand-authored ground truth, separating the raw Gemini output from the guardrail-validated final result:
+
+| Metric | Result |
+| --- | --- |
+| Final correctness (vs. ground truth) | 5/5 |
+| Unsupported claims (raw LLM asserted `possible_explanation` without real support) | 0/5 |
+| Evidence traceability (raw citations == expected citations, exactly) | 4/5 |
+| Guardrail interventions (upgrade blocked) | 0/5 |
+| Baseline agreement (secondary) | 5/5 |
+
+Notable: case 5 included three decoy transactions (wrong system, wrong type, wrong amount) alongside one fully-correct one; the model cited only the correct one. Cases 3/4 (amount matches but wrong system / wrong type) were correctly called `insufficient_evidence`, not a naive amount-only match. The one "non-traceable" case (case 1) wasn't a wrong citation — the model additionally cited a legitimate contextual `system_update`, which the evaluation's exact-set-equality metric penalized; that's a limitation of the metric, not evidence of a bad citation. No guardrail intervention occurred in this run, so this evaluation didn't exercise that safety net - only `/investigate`'s unit tests (with a fake, deliberately-violating callable) do.
+
 ## Testing
 
 ```bash
@@ -94,7 +112,9 @@ pytest
 - No authentication on the API.
 - `/compare` accepts raw request bodies only; there is no endpoint to compare files already on the server.
 - `/investigate`'s evidence (`investigation.py`'s `TRANSACTIONS`/`SYSTEM_UPDATES`) is a small, fixed, synthetic dataset — not a real transaction source.
-- `/investigate` has **not been exercised against a live Gemini API call in this repo** — no `GEMINI_API_KEY`/`GOOGLE_API_KEY` was available in this environment to run one (verified 2026-10-31: neither variable is set). All 52 tests, including every LLM-path test, run against a fake `generate_finding` callable and never reach the network. Live verification (a real API call confirming a `LLMInvestigationFinding` comes back, passes validation, and keeps `requires_human_review=True`) is still outstanding and should be the first thing re-checked once a key is available.
+- `/investigate` has been exercised against a **single** live Gemini call (see Live verification above) — not a broad or repeated check. The pytest suite (52 tests) still runs entirely offline against a fake `generate_finding` callable.
+- The 5-case v0.6 evaluation is a single run, no retries/sampling across multiple calls per case to check consistency, and it happened to produce zero guardrail interventions — the upgrade-blocking guardrail itself is only exercised by `test_llm_investigation.py`'s deliberately-violating fake callables, not by a real model response in this repo.
+- The v0.6 evidence-traceability metric uses exact set equality between cited and expected references, which penalizes a model response that cites correct *additional* context (as case 1 did) the same as one that cites something wrong — a stricter "citations include expected, and extras are plausible context" check would be more accurate but wasn't built to keep this increment small.
 - `gemini-2.0-flash` (this adapter's original default) was shut down by Google. The current default, `gemini-3.8-flash`, and its free-tier + structured-output support were confirmed by fetching `ai.google.dev/gemini-api/docs/models`, `.../structured-output`, and `.../pricing` on 2026-10-31 — confirmed against Google's docs, not against a live call.
 - The installed `google-genai` SDK (2.34.0, the latest release) configures structured output via `GenerateContentConfig(response_mime_type=..., response_schema=...)`. Google's current docs show a differently-shaped `response_format` parameter in their examples; that may be a newer REST/other-language convention not yet exposed by this Python SDK release. This adapter uses the fields the installed SDK actually has (verified by introspecting `GenerateContentConfig.model_fields`), not the docs' example shape — re-check this if upgrading the SDK.
 - `/investigate` only supports Google's Gemini via `response_schema` structured output — no other LLM provider configured at once (swapping is a one-file change, see above).
