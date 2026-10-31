@@ -1,3 +1,26 @@
+import csv
+
+
+def load_loans_from_csv(path: str) -> list[dict]:
+    with open(path, newline="") as csv_file:
+        rows = list(csv.DictReader(csv_file))
+
+    loans = []
+    for row in rows:
+        loan = dict(row)
+        amount = loan.get("outstanding_amount")
+        if amount is not None:
+            try:
+                loan["outstanding_amount"] = (
+                    float(amount) if "." in amount else int(amount)
+                )
+            except ValueError:
+                pass
+        loans.append(loan)
+
+    return loans
+
+
 def _malformed_reason(loan: dict) -> str | None:
     missing = [key for key in ("currency", "outstanding_amount") if key not in loan]
     if missing:
@@ -43,7 +66,7 @@ def _index_and_validate(
     for loan in system:
         loan_id = loan.get("loan_id")
 
-        if loan_id is None:
+        if not loan_id:
             issues.append(
                 {
                     "loan_id": None,
@@ -113,21 +136,8 @@ def compare_datasets(system_a: list[dict], system_b: list[dict]) -> list[dict]:
 
 
 if __name__ == "__main__":
-    loan_system = [
-        {"loan_id": "LN-1001", "outstanding_amount": 150000, "currency": "EUR"},
-        {"loan_id": "LN-1002", "outstanding_amount": 90000, "currency": "USD"},
-        {"loan_id": "LN-1003", "outstanding_amount": 50000, "currency": "EUR"},
-        {"loan_id": "LN-1006", "outstanding_amount": "not-a-number", "currency": "EUR"},
-        {"loan_id": "LN-1007", "outstanding_amount": 10000, "currency": "EUR"},
-        {"loan_id": "LN-1007", "outstanding_amount": 20000, "currency": "EUR"},
-        {"outstanding_amount": 5000, "currency": "EUR"},
-    ]
-
-    risk_system = [
-        {"loan_id": "LN-1001", "outstanding_amount": 135000, "currency": "EUR"},
-        {"loan_id": "LN-1002", "outstanding_amount": 90000, "currency": "GBP"},
-        {"loan_id": "LN-1004", "outstanding_amount": 20000, "currency": "EUR"},
-    ]
+    loan_system = load_loans_from_csv("loan_system.csv")
+    risk_system = load_loans_from_csv("risk_system.csv")
 
     for result in compare_datasets(loan_system, risk_system):
         print(result)

@@ -1,4 +1,4 @@
-from main import compare_datasets
+from main import compare_datasets, load_loans_from_csv
 
 
 def test_matching_records_report_zero_difference():
@@ -123,6 +123,28 @@ def test_non_numeric_amount_is_reported_as_malformed():
             "difference": None,
             "reason": "outstanding_amount is not a number",
         }
+    ]
+
+
+def test_load_loans_from_csv_parses_numeric_amount(tmp_path):
+    csv_path = tmp_path / "loans.csv"
+    csv_path.write_text("loan_id,outstanding_amount,currency\nLN-2001,150000,EUR\n")
+
+    loans = load_loans_from_csv(str(csv_path))
+
+    assert loans == [
+        {"loan_id": "LN-2001", "outstanding_amount": 150000, "currency": "EUR"}
+    ]
+
+
+def test_load_loans_from_csv_keeps_unparseable_amount_for_validation(tmp_path):
+    csv_path = tmp_path / "loans.csv"
+    csv_path.write_text("loan_id,outstanding_amount,currency\nLN-2002,not-a-number,EUR\n")
+
+    loans = load_loans_from_csv(str(csv_path))
+
+    assert loans == [
+        {"loan_id": "LN-2002", "outstanding_amount": "not-a-number", "currency": "EUR"}
     ]
 
 

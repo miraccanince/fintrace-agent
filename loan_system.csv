@@ -1,0 +1,5 @@
+loan_id,outstanding_amount,currency
+LN-1001,150000,EUR
+LN-1002,90000,USD
+LN-1003,50000,EUR
+LN-1005,30000,EUR
