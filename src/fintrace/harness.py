@@ -14,6 +14,8 @@ in-process tools in v0.8b:
 
 A step is a dict, either
     {"type": "tool_call", "tool": name, "arguments": {...}}
+or, when one reply holds several calls, run in order and stopped at the first failure,
+    {"type": "tool_calls", "calls": [{"tool": name, "arguments": {...}}, ...]}
 or
     {"type": "final", "finding": ..., "explanation": ..., "evidence_references": [...]}
 
@@ -178,6 +180,11 @@ def _step_kind(step: Any) -> str | None:
         return "final"
     if step.get("type") == "tool_call" and isinstance(step.get("tool"), str):
         return "tool_call"
+    calls = step.get("calls")
+    if step.get("type") == "tool_calls" and isinstance(calls, list) and calls and all(
+        isinstance(call, dict) and isinstance(call.get("tool"), str) for call in calls
+    ):
+        return "tool_calls"
     return None
 
 
@@ -233,26 +240,44 @@ def run_investigation(
             final_step = step
             break
 
-        if agent_calls >= max_tool_calls:
-            trace.append({
-                "seq": len(trace) + 1, "origin": "agent", "tool": step["tool"],
-                "arguments": step.get("arguments", {}), "outcome": "not_executed",
-                "reason": "tool call limit reached",
+        # One reply may hold several calls. They run one at a time, in order; after the
+        # first failure the rest are not run, since they may have depended on it.
+        calls = step["calls"] if kind == "tool_calls" else [step]
+        failed = limit_reached = False
+        for position, call in enumerate(calls):
+            tool, arguments = call["tool"], call.get("arguments", {})
+            skipped = None
+            if agent_calls >= max_tool_calls:
+                skipped, limit_reached = "tool call limit reached", True
+            elif failed:
+                skipped = "an earlier call in the same reply failed"
+            if skipped:
+                trace.append({
+                    "seq": len(trace) + 1, "origin": "agent", "tool": tool, "arguments": arguments,
+                    "outcome": "not_executed", "reason": skipped,
+                })
+            if limit_reached:
+                continue
+
+            call_entry = {"role": "tool_call", "tool": tool, "arguments": arguments}
+            if position > 0:
+                call_entry["same_reply"] = True  # the model's reply is already in history with the first call
+            elif "provider_content" in step:  # opaque to the harness; the agent layer replays it to the model unchanged
+                call_entry["provider_content"] = step["provider_content"]
+            history.append(call_entry)
+            if skipped:
+                outcome, content = "not_executed", {"error": f"not executed: {skipped}"}
+            else:
+                agent_calls += 1
+                outcome, content = _call_tool(tool, arguments, "agent", policy, advertised, execute, trace)
+                failed = outcome != "ok"
+            history.append({
+                "role": "tool_result", "tool": tool, "outcome": outcome, "content": content,
+                "remaining_tool_calls": max_tool_calls - agent_calls,
             })
+        if limit_reached:
             stop_reason = TOOL_CALL_LIMIT
             break
-
-        agent_calls += 1
-        arguments = step.get("arguments", {})
-        call_entry = {"role": "tool_call", "tool": step["tool"], "arguments": arguments}
-        if "provider_content" in step:  # opaque to the harness; the agent layer replays it to the model unchanged
-            call_entry["provider_content"] = step["provider_content"]
-        history.append(call_entry)
-        outcome, content = _call_tool(step["tool"], arguments, "agent", policy, advertised, execute, trace)
-        history.append({
-            "role": "tool_result", "tool": step["tool"], "outcome": outcome, "content": content,
-            "remaining_tool_calls": max_tool_calls - agent_calls,
-        })
 
     # Mandatory, harness-owned call: the report's numbers come from Python.
     outcome, content = _call_tool(COMPARISON_TOOL, {"loan_id": loan_id}, "harness", policy, advertised, execute, trace)

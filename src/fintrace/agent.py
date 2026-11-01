@@ -33,7 +33,7 @@ Rules:
 - The finding is possible_explanation only if the records you retrieved support an explanation; otherwise insufficient_evidence.
 - Cite only record ids (TX-..., SN-..., RUN-...) that appeared in tool results you received.
 - Finish by calling submit_final_answer. A human reviews every answer.
-- Make exactly one function call per response. Never return more than one function call in the same response.
+- You may request several tool calls in one response. They run in order and each counts toward the limit; if one fails, the rest of that response are not run. Call submit_final_answer alone, never together with other calls.
 """
 
 FINAL_ANSWER_DECLARATION = {
@@ -62,6 +62,8 @@ def _messages(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
             text = f"Investigate loan {message['loan_id']}. You may make at most {message['max_tool_calls']} tool calls."
             messages.append({"role": "user", "content": text})
         elif message["role"] == "tool_call":
+            if message.get("same_reply"):
+                continue  # already inside the assistant message of the first call in this reply
             original = message.get("provider_content")
             if original is not None:
                 messages.append(original)  # the model's own reply, replayed unchanged
@@ -79,25 +81,33 @@ def _messages(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _to_step(response: Any) -> dict[str, Any]:
-    """Map a model reply to a harness step. Anything that is not exactly one
-    function call becomes an invalid step."""
+    """Map a model reply to a harness step: one function call, several tool calls to run
+    in order, or a final answer, which must be alone. Anything else is an invalid step."""
     reply = response.get("message") if isinstance(response, dict) else None
     if not isinstance(reply, dict):
         return {"type": "invalid", "reason": "reply has no message"}
     calls = reply.get("tool_calls") or []
-    if not isinstance(calls, list) or len(calls) != 1 or not isinstance(calls[0], dict):
-        names = [c.get("function", {}).get("name") for c in calls if isinstance(c, dict)] if isinstance(calls, list) else []
-        return {"type": "invalid", "reason": f"expected exactly one function call, got {len(calls)}: {names}"}
-
-    function = calls[0].get("function")
-    if not isinstance(function, dict) or not isinstance(function.get("name"), str):
+    functions = [c.get("function") if isinstance(c, dict) else None for c in calls] if isinstance(calls, list) else []
+    if not functions:
+        return {"type": "invalid", "reason": "expected at least one function call, got 0"}
+    if not all(isinstance(f, dict) and isinstance(f.get("name"), str) for f in functions):
         return {"type": "invalid", "reason": "function call has no name"}
-    name, arguments = function["name"], function.get("arguments") or {}
-    if name == FINAL_ANSWER_TOOL:
+
+    names = [f["name"] for f in functions]
+    if FINAL_ANSWER_TOOL in names:
+        if len(names) > 1:
+            return {"type": "invalid", "reason": f"{FINAL_ANSWER_TOOL} must be the only function call in a reply, got {len(names)}: {names}"}
+        arguments = functions[0].get("arguments") or {}
         if not isinstance(arguments, dict):
             return {"type": "invalid", "reason": "final answer arguments are not an object"}
         return {**arguments, "type": "final"}  # "type" last, so the model cannot override it
-    return {"type": "tool_call", "tool": name, "arguments": arguments, "provider_content": reply}
+    if len(functions) == 1:
+        return {"type": "tool_call", "tool": names[0], "arguments": functions[0].get("arguments") or {}, "provider_content": reply}
+    return {
+        "type": "tool_calls",
+        "calls": [{"tool": f["name"], "arguments": f.get("arguments") or {}} for f in functions],
+        "provider_content": reply,
+    }
 
 
 def make_generate_step(call_model: Callable[[list[dict], list[dict], str], Any]):
@@ -116,6 +126,7 @@ def main(argv: list[str] | None = None, call_model: Callable | None = None) -> i
     parser.add_argument("loan_id")
     parser.add_argument("--db", required=True, help="path to the banking SQLite database")
     parser.add_argument("--max-tool-calls", type=int, default=harness.DEFAULT_MAX_TOOL_CALLS)
+    parser.add_argument("--mcp", action="store_true", help="reach the tools through a local MCP server")
     args = parser.parse_args(argv)
 
     if call_model is None:
@@ -128,11 +139,17 @@ def main(argv: list[str] | None = None, call_model: Callable | None = None) -> i
     except Exception as error:
         print(f"cannot open database: {error}", file=sys.stderr)
         return 2
+    generate_step = make_generate_step(call_model)
     try:
-        report = harness.run_investigation(
-            args.loan_id, make_generate_step(call_model), tools.make_executor(connection),
-            max_tool_calls=args.max_tool_calls,
-        )
+        if args.mcp:
+            from fintrace import mcp_client
+
+            with mcp_client.connect(args.db) as (advertised, execute):
+                report = harness.run_investigation(
+                    args.loan_id, generate_step, execute, advertised=advertised, max_tool_calls=args.max_tool_calls)
+        else:
+            report = harness.run_investigation(
+                args.loan_id, generate_step, tools.make_executor(connection), max_tool_calls=args.max_tool_calls)
     finally:
         connection.close()
     print(json.dumps(report, indent=2))

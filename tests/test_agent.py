@@ -62,7 +62,6 @@ def test_submit_final_answer_becomes_a_final_step_and_cannot_override_the_type()
 @pytest.mark.parametrize(
     "response",
     [
-        reply(("get_loan", {}), ("get_transactions", {})),
         reply(("submit_final_answer", {}), ("get_loan", {})),
         reply(text="I think it is a timing issue."),
         reply(),
@@ -83,24 +82,33 @@ def test_final_answer_with_non_object_arguments_is_an_invalid_step():
     assert agent._to_step(reply(("submit_final_answer", "all done")))["type"] == "invalid"
 
 
-def test_multiple_function_calls_report_their_names_in_the_reason():
-    step = agent._to_step(reply(("get_loan", {"loan_id": "LN-1", "secret": "s3cr3t"}), ("get_transactions", {})))
+def test_several_function_calls_become_one_ordered_batch_step():
+    response = reply(("get_loan", {"loan_id": "LN-1"}), ("get_transactions", {"loan_id": "LN-1"}))
+
+    assert agent._to_step(response) == {
+        "type": "tool_calls",
+        "calls": [{"tool": "get_loan", "arguments": {"loan_id": "LN-1"}}, {"tool": "get_transactions", "arguments": {"loan_id": "LN-1"}}],
+        "provider_content": response["message"],
+    }
+
+
+def test_a_final_answer_mixed_with_other_calls_is_invalid_and_names_the_calls_without_arguments():
+    step = agent._to_step(reply(("get_loan", {"loan_id": "LN-1", "secret": "s3cr3t"}), ("submit_final_answer", {})))
 
     assert step["type"] == "invalid"
-    assert "get_loan" in step["reason"] and "get_transactions" in step["reason"]
+    assert "get_loan" in step["reason"] and "submit_final_answer" in step["reason"]
     assert "s3cr3t" not in step["reason"]
 
 
-def test_system_prompt_requires_qualified_wording_and_bans_definitive_causal_phrases():
-    prompt = agent.SYSTEM_PROMPT
+def test_a_batch_with_an_unnamed_call_is_invalid():
+    response = {"message": {"tool_calls": [{"function": {"name": "get_loan", "arguments": {}}}, {"function": {"arguments": {}}}]}}
 
-    assert "qualified language" in prompt
-    for phrase in ("is caused by", "proves", "confirms"):
-        assert f'"{phrase}"' in prompt  # listed as wording the model must not use
+    assert agent._to_step(response)["type"] == "invalid"
 
 
-def test_system_prompt_requires_exactly_one_function_call_per_response():
-    assert "exactly one function call" in agent.SYSTEM_PROMPT
+def test_system_prompt_allows_ordered_batches_and_requires_the_final_answer_alone():
+    assert "several tool calls in one response" in agent.SYSTEM_PROMPT
+    assert "run in order" in agent.SYSTEM_PROMPT and "submit_final_answer alone" in agent.SYSTEM_PROMPT
 
 
 # --- history -> messages --------------------------------------------------------------------
@@ -172,10 +180,59 @@ def test_scripted_replies_drive_a_complete_investigation(db):
     assert len(model.seen[2]["contents"]) == 5  # task + two (call, result) pairs
 
 
-def test_a_reply_with_two_function_calls_is_rejected_by_the_harness(db):
-    report, _ = run(db, "S1", [reply(("get_loan", {"loan_id": "x"}), ("get_loan", {"loan_id": "y"}))])
+ANSWER = {"finding": "insufficient_evidence", "explanation": "x", "evidence_references": []}
+
+
+def outcomes(report):
+    return [t["outcome"] for t in report["trace"] if t["origin"] == "agent"]
+
+
+def test_a_reply_mixing_a_final_answer_with_a_call_is_rejected_by_the_harness(db):
+    report, _ = run(db, "S1", [reply(("get_loan", {"loan_id": "x"}), ("submit_final_answer", ANSWER))])
 
     assert report["stop_reason"] == "invalid_model_output" and report["tool_calls"]["agent_requested"] == 0
+
+
+def test_a_batch_runs_in_order_and_each_result_goes_back_after_the_one_reply(db):
+    loan_id = db["truth"]["S1"]["loan_id"]
+    batch = reply(("get_loan", {"loan_id": loan_id}), ("compare_latest_snapshots", {"loan_id": loan_id}))
+
+    report, model = run(db, "S1", [batch, reply(("submit_final_answer", ANSWER))])
+
+    assert [t["tool"] for t in report["trace"] if t["origin"] == "agent"] == ["get_loan", "compare_latest_snapshots"]
+    assert outcomes(report) == ["ok", "ok"] and report["tool_calls"]["agent_requested"] == 2
+    messages = model.seen[1]["contents"]
+    assert [m["role"] for m in messages] == ["user", "assistant", "tool", "tool"]
+    assert messages[1] == batch["message"] and len(messages[1]["tool_calls"]) == 2
+    assert [m["tool_name"] for m in messages[2:]] == ["get_loan", "compare_latest_snapshots"]
+    assert [json.loads(m["content"])["remaining_tool_calls"] for m in messages[2:]] == [7, 6]
+
+
+@pytest.mark.parametrize("failing", [("bogus_tool", {}), ("get_loan", {})])  # not allowed / invalid arguments
+def test_after_a_failed_call_the_rest_of_the_batch_is_not_executed(db, failing):
+    loan_id = db["truth"]["S1"]["loan_id"]
+    batch = reply(("get_loan", {"loan_id": loan_id}), failing, ("get_transactions", {"loan_id": loan_id}))
+
+    report, model = run(db, "S1", [batch, reply(("submit_final_answer", ANSWER))])
+
+    assert outcomes(report) == ["ok", "rejected", "not_executed"]
+    assert report["tool_calls"]["agent_requested"] == 2  # a skipped call does not use budget
+    skipped = [t for t in report["trace"] if t["outcome"] == "not_executed"][0]
+    assert skipped["reason"] == "an earlier call in the same reply failed"
+    results = [json.loads(m["content"]) for m in model.seen[1]["contents"][2:]]
+    assert [r["outcome"] for r in results] == ["ok", "rejected", "not_executed"]
+    assert report["stop_reason"] == "final_answer"
+
+
+def test_a_batch_cannot_exceed_the_total_call_budget(db):
+    loan_id = db["truth"]["S1"]["loan_id"]
+    batch = reply(*[("get_loan", {"loan_id": loan_id})] * 3)
+
+    report, _ = run(db, "S1", [batch], max_tool_calls=2)
+
+    assert outcomes(report) == ["ok", "ok", "not_executed"]
+    assert report["stop_reason"] == "tool_call_limit" and report["tool_calls"]["agent_requested"] == 2
+    assert [t["reason"] for t in report["trace"] if t["outcome"] == "not_executed"] == ["tool call limit reached"]
 
 
 # --- Ollama adapter ----------------------------------------------------------------------------------
