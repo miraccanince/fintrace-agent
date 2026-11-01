@@ -78,6 +78,18 @@
   table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 0.88rem; }
   th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--border); }
   th { color: var(--muted); font-weight: 600; font-size: 0.78rem; text-transform: uppercase; }
+  button.ai { background: var(--navy); }
+  button.ai:disabled { background: #8493a8; }
+  .card + .card { margin-top: 20px; }
+  .badge.incomplete { background: var(--danger-bg); color: var(--danger); }
+  .review { margin: 12px 0; font-size: 0.8rem; font-weight: 600; color: var(--navy); }
+  .review::before { content: "●"; color: var(--blue); margin-right: 6px; }
+  .explanation { margin: 12px 0 0; font-size: 0.95rem; line-height: 1.5; white-space: pre-wrap; }
+  .incomplete-msg { margin: 12px 0 0; font-size: 0.92rem; color: var(--danger); }
+  details { margin-top: 10px; border-top: 1px solid var(--border); padding-top: 8px; font-size: 0.85rem; color: var(--muted); }
+  summary { cursor: pointer; font-weight: 600; }
+  details ul { margin: 6px 0 0; padding-left: 18px; color: var(--ink); }
+  details p { margin: 6px 0 0; }
   .pill { font-size: 0.72rem; padding: 1px 6px; border-radius: 6px; background: var(--danger-bg); color: var(--danger); }
 </style>
 </head>
@@ -89,9 +101,15 @@
     <div class="row">
       <input id="loan-id" type="text" placeholder="Loan ID, e.g. LN-5001" autocomplete="off">
       <button id="investigate">Compare Balances</button>
+      <button id="ai-investigate" class="ai">Investigate with AI</button>
     </div>
     <div id="status"></div>
     <div id="result" class="result" hidden></div>
+  </div>
+  <div class="card" id="ai-card" hidden>
+    <h2 style="margin:0 0 4px;font-size:1.05rem;color:var(--navy)">AI investigation</h2>
+    <div id="ai-status"></div>
+    <div id="ai-result" class="result" hidden></div>
   </div>
 </main>
 <script>
@@ -167,7 +185,116 @@
     }
   }
 
+  // --- AI investigation. Everything the model or tools produced is inserted with
+  // textContent, never innerHTML.
+  const aiButton = document.getElementById("ai-investigate");
+  const aiCard = document.getElementById("ai-card");
+  const aiStatus = document.getElementById("ai-status");
+  const aiResult = document.getElementById("ai-result");
+
+  const STOP_LABELS = {
+    final_answer: "Completed",
+    tool_call_limit: "Tool-call limit reached",
+    invalid_model_output: "Model returned an invalid step",
+    invalid_final_answer: "Final answer was rejected",
+    model_error: "Model or server error",
+    internal_validation_error: "Internal validation failed",
+  };
+
+  function el(tag, text, className) {
+    const node = document.createElement(tag);
+    if (text !== undefined && text !== null) node.textContent = text;
+    if (className) node.className = className;
+    return node;
+  }
+
+  function section(title, ...content) {
+    const node = el("details");
+    node.append(el("summary", title), ...content);
+    return node;
+  }
+
+  function renderReport(report, seconds) {
+    const complete = report.stop_reason === "final_answer";
+    const base = report.authoritative || {};
+    const currency = (base.loan_system || base.risk_system || {}).currency || null;
+    aiResult.replaceChildren();
+
+    aiResult.append(el("span", complete ? (report.finding || "").replaceAll("_", " ") : "Investigation incomplete", complete ? "badge" : "badge incomplete"));
+    aiResult.append(el("div", base.difference === undefined ? "—" : formatMoney(base.difference, currency), "difference"));
+    aiResult.append(el("div", "loan_system minus risk_system", "note"));
+
+    if (complete) {
+      aiResult.append(el("p", report.explanation, "explanation"));
+    } else {
+      aiResult.append(el("p", `The investigation did not finish (${STOP_LABELS[report.stop_reason] || report.stop_reason}). No finding was produced.`, "incomplete-msg"));
+    }
+    if (report.requires_human_review) aiResult.append(el("div", "Human review required — AI-assisted, not verified.", "review"));
+
+    if (complete) {
+      const list = el("ul");
+      (report.cited_records || []).forEach((id) => list.append(el("li", id)));
+      if (!list.children.length) list.append(el("li", "none"));
+      aiResult.append(section(`Cited records (${(report.cited_records || []).length})`, list));
+    }
+
+    const table = el("table");
+    const header = el("tr");
+    ["#", "By", "Tool", "Outcome"].forEach((name) => header.append(el("th", name)));
+    table.append(header);
+    (report.trace || []).forEach((entry) => {
+      const row = el("tr");
+      const outcome = entry.reason ? `${entry.outcome}: ${entry.reason}` : entry.outcome;
+      [entry.seq, entry.origin, entry.tool || "—", outcome].forEach((value) => row.append(el("td", value)));
+      table.append(row);
+    });
+    aiResult.append(section(`Tool-call trace (${(report.trace || []).length})`, table));
+
+    const calls = report.tool_calls || {};
+    const technical = section(
+      "Technical details",
+      el("p", `Stop reason: ${report.stop_reason}`),
+      el("p", `Agent tool calls: ${calls.agent_requested} of ${calls.agent_budget}`),
+      el("p", `Time: ${seconds} s`),
+    );
+    if (report.error) technical.append(el("p", `Error: ${report.error}`));
+    technical.open = !complete;
+    aiResult.append(technical);
+    aiResult.hidden = false;
+  }
+
+  async function investigateWithAi() {
+    const loanId = loanInput.value.trim();
+    if (!loanId) { setStatus("Enter a loan ID.", true); return; }
+
+    aiCard.hidden = false;
+    aiResult.hidden = true;
+    aiButton.disabled = button.disabled = true;
+    const started = Date.now();
+    const tick = () => { aiStatus.textContent = `Investigating… ${Math.round((Date.now() - started) / 1000)} s. It can take several minutes, especially the first time while the model loads.`; aiStatus.className = ""; };
+    tick();
+    const timer = setInterval(tick, 1000);
+
+    try {
+      const response = await fetch(`/api/loans/${encodeURIComponent(loanId)}/investigation`, { method: "POST" });
+      if (response.status === 409) { aiStatus.textContent = "Another investigation is already running. Try again when it finishes."; aiStatus.className = "error"; return; }
+      if (!response.ok) { aiStatus.textContent = `Investigation failed (HTTP ${response.status}).`; aiStatus.className = "error"; return; }
+      const data = await response.json();
+      if (data.found === false) { aiStatus.textContent = `Loan "${loanId}" was not found.`; return; }
+      if (data.server_error) { aiStatus.textContent = `Investigation failed: ${data.server_error}`; aiStatus.className = "error"; return; }
+      aiStatus.textContent = "";
+      renderReport(data, Math.round((Date.now() - started) / 1000));
+    } catch (error) {
+      aiStatus.textContent = "Could not reach the server.";
+      aiStatus.className = "error";
+    } finally {
+      clearInterval(timer);
+      aiButton.disabled = button.disabled = false;
+    }
+  }
+
   button.addEventListener("click", investigate);
+  aiButton.addEventListener("click", investigateWithAi);
   loanInput.addEventListener("keydown", (event) => { if (event.key === "Enter") investigate(); });
 </script>
 </body>

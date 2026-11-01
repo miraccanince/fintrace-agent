@@ -53,3 +53,166 @@ def test_ui_route_duplicates_no_business_calculation():
 
     source = inspect.getsource(api.loan_comparison)
     assert "Decimal(" not in source and "difference" not in source
+
+
+# --- AI investigation ---------------------------------------------------------------------------------
+
+
+def agent_reply(name, arguments):
+    return {"message": {"role": "assistant", "content": "", "tool_calls": [{"function": {"name": name, "arguments": arguments}}]}}
+
+
+@pytest.fixture
+def fake_model():
+    """Install a scripted model for the endpoint; returns the list of requests it served."""
+    served = []
+
+    def install(*replies):
+        queue = list(replies)
+
+        def call_model(messages, declarations, system_prompt):
+            served.append(messages)
+            reply = queue.pop(0)
+            if isinstance(reply, Exception):
+                raise reply
+            return reply
+
+        api.app.dependency_overrides[api.get_agent_call_model] = lambda: call_model
+        return served
+
+    yield install
+    api.app.dependency_overrides.clear()
+
+
+def test_ai_investigation_returns_the_full_report_over_mcp(client, fake_model):
+    answer = {"finding": "possible_explanation", "explanation": "may be partial posting", "evidence_references": ["TX-00087"]}
+    served = fake_model(
+        agent_reply("summarize_payment_refs", {"loan_id": "LN-5008"}), agent_reply("get_transactions", {"loan_id": "LN-5008"}),
+        agent_reply("submit_final_answer", answer))
+
+    response = client.post("/api/loans/LN-5008/investigation")
+
+    report = response.json()
+    assert response.status_code == 200 and len(served) == 3
+    assert report["stop_reason"] == "final_answer" and report["finding"] == "possible_explanation"
+    assert report["explanation"] == "may be partial posting" and report["cited_records"] == ["TX-00087"]
+    assert report["requires_human_review"] is True and report["authoritative"]["difference"] == "7000.00"
+    assert [t["tool"] for t in report["trace"]] == ["summarize_payment_refs", "get_transactions", "compare_latest_snapshots"]
+    assert [t["origin"] for t in report["trace"]] == ["agent", "agent", "harness"]
+
+
+@pytest.mark.parametrize("failure", [RuntimeError("ollama is down"), {"message": {"content": "no tool call"}}])
+def test_an_incomplete_investigation_is_a_normal_result_with_no_finding(client, fake_model, failure):
+    fake_model(failure)
+
+    response = client.post("/api/loans/LN-5008/investigation")
+
+    report = response.json()
+    assert response.status_code == 200 and report["stop_reason"] != "final_answer"
+    assert report["finding"] is None and report["explanation"] is None and report["cited_records"] == []
+    assert report["requires_human_review"] is True and report["authoritative"]["difference"] == "7000.00"
+
+
+def test_an_unknown_loan_does_not_start_the_model(client, fake_model):
+    served = fake_model()
+
+    response = client.post("/api/loans/LN-NOPE/investigation")
+
+    assert response.status_code == 200 and response.json() == {"loan_id": "LN-NOPE", "found": False} and served == []
+
+
+def test_a_missing_database_returns_503_for_the_investigation(tmp_path, monkeypatch):
+    monkeypatch.setattr(api, "_DB_PATH", str(tmp_path / "missing.db"))
+
+    assert TestClient(api.app).post("/api/loans/LN-5008/investigation").status_code == 503
+
+
+def test_only_one_investigation_runs_at_a_time_and_the_lock_is_always_released(client, fake_model):
+    served = fake_model(RuntimeError("boom"), agent_reply("submit_final_answer", {"finding": "insufficient_evidence", "explanation": "x", "evidence_references": []}))
+
+    assert api._investigation_lock.acquire(blocking=False)
+    try:
+        busy = client.post("/api/loans/LN-5008/investigation")
+    finally:
+        api._investigation_lock.release()
+    first = client.post("/api/loans/LN-5008/investigation")  # fails inside the model
+    second = client.post("/api/loans/LN-5008/investigation")  # lock was released after the failure
+
+    assert busy.status_code == 409 and len(served) == 2  # the busy request never reached the model
+    assert first.json()["stop_reason"] == "model_error" and second.json()["stop_reason"] == "final_answer"
+
+
+def test_compare_balances_is_still_the_same_separate_deterministic_call(client):
+    page = client.get("/ui").text
+
+    assert 'id="investigate">Compare Balances</button>' in page
+    assert 'id="ai-investigate"' in page and "Investigate with AI" in page
+    assert "/api/loans/${encodeURIComponent(loanId)}/comparison" in page  # unchanged compare request
+
+
+def test_model_generated_content_is_rendered_with_textcontent_only():
+    page = (api.Path(api.__file__).parent / "static" / "index.html").read_text(encoding="utf-8")
+    ai_code = page[page.index("// --- AI investigation"):page.index('button.addEventListener("click", investigate);')]
+
+    assert ".textContent" in ai_code and "innerHTML" not in ai_code.replace("never innerHTML", "")
+    assert "insertAdjacentHTML" not in ai_code and "outerHTML" not in ai_code
+
+
+def test_a_slow_investigation_keeps_the_connection_alive_with_leading_whitespace(client, fake_model, monkeypatch):
+    import time
+
+    monkeypatch.setattr(api, "_KEEPALIVE_SECONDS", 0.05)
+    answer = {"finding": "insufficient_evidence", "explanation": "x", "evidence_references": []}
+    fake_model(agent_reply("submit_final_answer", answer))
+    original = api.agent.investigate
+    monkeypatch.setattr(api.agent, "investigate", lambda *a, **k: (time.sleep(0.3), original(*a, **k))[1])
+
+    response = client.post("/api/loans/LN-5008/investigation")
+
+    assert response.text.startswith("\n") and len(response.text) - len(response.text.lstrip()) >= 2  # several keepalives
+    assert response.json()["stop_reason"] == "final_answer"  # leading newlines are valid JSON whitespace
+    assert api._investigation_lock.acquire(blocking=False)
+    api._investigation_lock.release()
+
+
+def test_an_unexpected_failure_is_reported_in_the_body_and_releases_the_lock(client, fake_model, monkeypatch):
+    fake_model()
+    monkeypatch.setattr(api.agent, "investigate", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("cannot start tool server")))
+
+    response = client.post("/api/loans/LN-5008/investigation")
+
+    assert response.status_code == 200 and response.json() == {"server_error": "RuntimeError: cannot start tool server"}
+    assert api._investigation_lock.acquire(blocking=False)
+    api._investigation_lock.release()
+
+
+def test_the_run_goes_on_and_frees_the_lock_after_the_client_stops_listening(client, fake_model, monkeypatch):
+    import threading
+
+    started, finish = threading.Event(), threading.Event()
+    fake_model()
+
+    def slow_investigation(*args, **kwargs):
+        started.set()
+        finish.wait(5)
+        return {"stop_reason": "model_error"}
+
+    monkeypatch.setattr(api.agent, "investigate", slow_investigation)
+    response = api.loan_investigation("LN-5008", call_model=lambda *a: None)  # headers only; the body is never read
+    assert started.wait(5) and api._investigation_lock.locked()  # still running with nobody listening
+
+    finish.set()
+    api._investigation_worker.submit(lambda: None).result(5)  # the single worker is free once the run is done
+    assert not api._investigation_lock.locked() and response.status_code == 200
+
+
+def test_ai_result_keeps_citations_trace_and_technical_details_in_collapsible_sections():
+    page = (api.Path(api.__file__).parent / "static" / "index.html").read_text(encoding="utf-8")
+    ai_code = page[page.index("// --- AI investigation"):page.index('button.addEventListener("click", investigate);')]
+
+    assert 'el("details")' in ai_code
+    for title in ("Cited records", "Tool-call trace", "Technical details"):
+        assert title in ai_code
+    assert "technical.open = !complete" in ai_code  # an incomplete run shows its details straight away
+    assert "Human review required" in ai_code and "did not finish" in ai_code and "No finding was produced" in ai_code
+    assert "Stop reason: ${report.stop_reason}" in ai_code  # the raw code lives only in the technical details

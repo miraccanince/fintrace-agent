@@ -14,6 +14,7 @@ becomes an invalid step the harness rejects; nothing is silently discarded.
 
 import argparse
 import json
+import sqlite3
 import sys
 from typing import Any, Callable
 
@@ -123,6 +124,25 @@ def make_generate_step(call_model: Callable[[list[dict], list[dict], str], Any])
     return generate_step
 
 
+def investigate(
+    loan_id: str,
+    connection: sqlite3.Connection,
+    call_model: Callable,
+    max_tool_calls: int = harness.DEFAULT_MAX_TOOL_CALLS,
+    mcp_db_path: str | None = None,
+) -> dict[str, Any]:
+    """Run one bounded investigation and return the harness report. Tools run
+    in-process on `connection`, or through a local MCP server on `mcp_db_path` if given."""
+    generate_step = make_generate_step(call_model)
+    if mcp_db_path is None:
+        return harness.run_investigation(loan_id, generate_step, tools.make_executor(connection), max_tool_calls=max_tool_calls)
+
+    from fintrace import mcp_client
+
+    with mcp_client.connect(mcp_db_path) as (advertised, execute):
+        return harness.run_investigation(loan_id, generate_step, execute, advertised=advertised, max_tool_calls=max_tool_calls)
+
+
 def main(argv: list[str] | None = None, call_model: Callable | None = None) -> int:
     parser = argparse.ArgumentParser(prog="fintrace.agent", description="Investigate one loan's balance discrepancy.")
     parser.add_argument("loan_id")
@@ -141,17 +161,8 @@ def main(argv: list[str] | None = None, call_model: Callable | None = None) -> i
     except Exception as error:
         print(f"cannot open database: {error}", file=sys.stderr)
         return 2
-    generate_step = make_generate_step(call_model)
     try:
-        if args.mcp:
-            from fintrace import mcp_client
-
-            with mcp_client.connect(args.db) as (advertised, execute):
-                report = harness.run_investigation(
-                    args.loan_id, generate_step, execute, advertised=advertised, max_tool_calls=args.max_tool_calls)
-        else:
-            report = harness.run_investigation(
-                args.loan_id, generate_step, tools.make_executor(connection), max_tool_calls=args.max_tool_calls)
+        report = investigate(args.loan_id, connection, call_model, args.max_tool_calls, args.db if args.mcp else None)
     finally:
         connection.close()
     print(json.dumps(report, indent=2))
