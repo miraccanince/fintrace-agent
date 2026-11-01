@@ -79,6 +79,17 @@ FINTRACE_DB=/tmp/banking.db uvicorn fintrace.api:app
 
 Open `http://127.0.0.1:8000/ui/`. **Compare Balances** shows a loan's latest snapshots and the deterministic difference. **Investigate with AI** runs the agent over MCP (it can take a few minutes) and shows the finding, a short explanation, a human-review notice, and collapsible cited records, tool-call trace and technical details. Only one investigation runs at a time.
 
+### Docker
+
+```bash
+docker build -t fintrace .
+docker run --rm -p 127.0.0.1:8000:8000 fintrace
+```
+
+Open `http://127.0.0.1:8000/ui/` (use another host port if 8000 is taken). The 1,000-loan demo database is created on first start; the ground-truth file is not kept. Ollama keeps running on the host: the container reaches it at `OLLAMA_BASE_URL`, which defaults to `http://host.docker.internal:11434` (Docker Desktop). On Linux add `--add-host=host.docker.internal:host-gateway` and make sure Ollama listens on an address the container can reach. The port is published on localhost only, the app runs as a non-root user, and there is no authentication, so do not expose it.
+
+Configuration (environment variables): `FINTRACE_DB` (database path), `OLLAMA_MODEL` (default `qwen3.5:9b`), `OLLAMA_BASE_URL` (default `http://localhost:11434`).
+
 ### Earlier evaluation
 
 An earlier version asked Gemini (`gemini-3.8-flash`) to explain discrepancies on a small set of in-memory fixtures. Ten synthetic cases were scored against hand-written ground truth, with raw model output kept apart from Python-validated results. The model matched the deterministic baseline and mainly added natural-language explanation; its optional hypotheses were labelled by Python consistency checks, and some explanations were weak (for example ignoring a reversal the model itself identified). Raw results and the corrected summary are in `evals/results/v0_7_results.json` and `evals/results/v0_7_summary.json`. That code was removed once the agent replaced it. The `source_sha256` values in the results match the evaluation sources at commit `8e528bf`.

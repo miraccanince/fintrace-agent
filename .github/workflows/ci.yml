@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: pip install -e ".[dev]"
+      - run: python -m pytest -q
+
+  docker-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t fintrace .
+      - run: docker run -d --name fintrace -p 127.0.0.1:8000:8000 fintrace
+      - name: Check the API and the generated 1,000-loan database
+        run: |
+          for i in $(seq 1 30); do curl -fs http://127.0.0.1:8000/ui/ > /dev/null && break; sleep 1; done
+          curl -fs http://127.0.0.1:8000/ui/ | grep -q "Investigate with AI"
+          curl -fs http://127.0.0.1:8000/api/loans/LN-5008/comparison | grep -q '"difference":"7000.00"'
+          curl -fs http://127.0.0.1:8000/api/loans/LN-6000/comparison | grep -q '"status":"match"'
+          curl -fs -X POST http://127.0.0.1:8000/api/loans/LN-NOPE/investigation | grep -q '"found":false'
+          test "$(docker exec fintrace id -u)" != "0"
+          docker exec fintrace test ! -e /tmp/ground_truth.json
+      - if: failure()
+        run: docker logs fintrace

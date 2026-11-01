@@ -1,0 +1,14 @@
+.git
+.github
+.claude
+.env
+.env.*
+.pytest_cache
+__pycache__
+*.pyc
+*.egg-info
+tests
+evals
+data
+CLAUDE.md
+FINTRACE_AGENT_ROADMAP.md
