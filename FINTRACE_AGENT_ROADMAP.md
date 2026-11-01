@@ -2,7 +2,7 @@
 
 *Evidence-Driven Financial Investigation*
 
-**Agile Engineering Roadmap · v2.2 · 31 October 2026**
+**Agile Engineering Roadmap · v2.3 · 1 November 2026**
 
 Repository: https://github.com/miraccanince/fintrace-agent
 
@@ -10,7 +10,7 @@ Repository: https://github.com/miraccanince/fintrace-agent
 
 **WHY (research-backed industry problem).** Banks struggle to produce reliable risk reports because fragmented systems and inadequate data-quality controls create inconsistencies that require manual investigation and correction. This increases operational costs and can compromise financial risk decisions.
 
-**WHAT.** Build an AI-powered financial discrepancy investigation agent that runs on synthetic financial records from different systems. A financial analyst requests an investigation using a loan identifier or a natural-language question. The agent:
+**WHAT.** A practical AI Engineering portfolio proof of concept, not an academic agent-vs-workflow research project: an AI-powered financial discrepancy investigation agent that runs on synthetic financial records from different systems. A financial analyst requests an investigation using a loan identifier or a natural-language question. The agent:
 
 - dynamically selects appropriate read-only investigation tools;
 - retrieves financial records and related evidence;
@@ -65,16 +65,21 @@ Status reflects the repository as of this roadmap version.
 | **v0.5c — Free LLM provider** | Done | Gemini free tier behind a plain callable dependency (`gemini_adapter.py`); one live smoke test passed. | Provider independence, credentials via `.env`, live verification. |
 | **v0.6 — Gemini evaluation** | Done | Five held-out cases scored against hand-authored ground truth. Gemini matched the baseline and mainly added natural-language explanation; no measurable analytical value was shown. | Correctness, unsupported claims, traceability, honest interpretation. |
 | **v0.7 — Evidence-based hypothesis evaluation** | Done (live evaluation run 2026-10-31; weaknesses recorded in README) | Optional AI hypothesis (partial payments, synchronization timing, conflicting evidence) labelled by Python consistency checks, separate from the authoritative finding. | Separating model output from Python-enforced status; negative controls. |
-| **v0.7b — Realistic synthetic banking data** | Partially complete | Done and verified: `src` layout, SQLite schema with read-only access (`banking_db.py`), seeded generator (`synthetic_data.py`), controlled discrepancy scenarios S1–S4 with ground truth in a separate file, and the read-only tools built on it. Not done: migration of the legacy fixtures (`investigation.py` lists, the runtime fixtures in `evals/eval_cases.py`) and of `/investigate` and the v0.7 evaluation to the new data. These stay as Keep, planned replacement until the agent has live evidence. | Package layout, data modelling, seeded generation, SQL, test-data isolation. |
-| **v0.8a — Minimal agent loop** | Implemented; live validation incomplete | Done and offline-tested (305 tests): read-only tools with two deterministic calculators (`tools.py`), bounded harness with allowlist, argument validation, budget, stop reasons, trace and final-answer checks (`harness.py`), Gemini function-calling agent and CLI (`agent.py`). Not done: a completed live investigation. One S1 attempt reached Gemini and its first function call (tool schemas accepted) and then hit the free-tier daily quota. | Tool calling, agent loop, bounded execution, trace testing. |
-| **v0.8b — MCP integration** | Planned | Expose the existing investigation tools through one minimal local MCP server; the agent discovers and invokes them through an MCP client. | MCP server/client, tool discovery, process boundaries, integration tests. |
-| **v0.9 — Multi-step investigation** | Planned, scope reduced | Most mechanics already exist in the v0.8a harness: bounded execution, rejected and invalid calls, tool errors, stop reasons. What remains is measuring them live: robustness runs over S1–S4, clean and unknown loans, repeated runs, and a comparison with the deterministic baseline (which needs the baseline to run on the SQLite data). | Failure handling, stopping conditions, robustness. |
-| **v0.10 — Architecture assessment** | Planned | Broader architecture assessment, not a mandatory refactor. Restructure (potentially lightweight Ports and Adapters) only if the evidence justifies it; otherwise keep the structure and record that as the outcome. The minimal `src` layout is done earlier, in v0.7b. | Boundaries, coupling, evidence-based refactoring decisions. |
-| **v0.11 — Delivery and operations** | Planned | API security, Docker, CI, and observability. | Auth, containers, GitHub Actions, logging, tracing. |
-| **v0.12 — Minimal web UI** | Planned | Minimal web UI for requesting an investigation and reading the report and trace. | Frontend basics, API consumption, UX for human review. |
-| **v1.0 — Portfolio release** | Planned | Final evaluation, end-to-end demonstration, documentation, and portfolio release. | Engineering communication, reproducibility, technical ownership. |
+| **v0.7b — Realistic synthetic banking data** | Partially complete | Done and verified: `src` layout, SQLite schema with read-only access (`banking_db.py`), seeded generator (`synthetic_data.py`), controlled discrepancy scenarios S1–S4 with ground truth in a separate file, and the read-only tools built on it. Not done: migration of the legacy fixtures (`investigation.py` lists, the runtime fixtures in `evals/eval_cases.py`) and of `/investigate` and the v0.7 evaluation to the new data. These stay as Keep, planned replacement until the agent has live evidence (see Known limitations). | Package layout, data modelling, seeded generation, SQL, test-data isolation. |
+| **v0.7c — SQLite-native deterministic baseline** | Done | `baseline.py`: `investigate_discrepancy_sqlite` reuses the agent's own tools (`compare_latest_snapshots`, `summarize_payment_refs`) to classify `possible_explanation` / `insufficient_evidence` on SQLite evidence, checking both amount and direction (never `confirmed`). Matches the S1–S4 ground truth outcomes, including the partial-posting case the legacy baseline missed. Not wired into `/investigate` or the eval harness; those still use the legacy fixtures (unchanged, see Known limitations). | SQL-free calculator reuse, signed correlation checks, offline tests against seeded ground truth. |
+| **v0.8a — Minimal agent loop** | Implemented; live validation incomplete | Done and offline-tested (322 tests): read-only tools with two deterministic calculators (`tools.py`), bounded harness with allowlist, argument validation, budget, stop reasons, trace and final-answer checks (`harness.py`), Gemini function-calling agent and CLI (`agent.py`). Not done: a completed live investigation. Two live S1 attempts so far: one was rejected for returning two function calls in one reply (now mitigated with a one-call-per-response prompt instruction and named-calls-in-trace debugging, not yet re-verified live); another hit a transient `503` from Gemini. **No live Gemini investigation has completed successfully; do not claim otherwise.** | Tool calling, agent loop, bounded execution, trace testing. |
+| **UI walking skeleton** | Partially done | Done: a static UI (`src/fintrace/static/index.html`) served by FastAPI, calling the deterministic `/api/loans/{loan_id}/comparison` endpoint to compare a loan's balances across systems. Not done: any AI investigation action in the UI. | Frontend basics, API consumption, UX for human review. |
 
-If an increment does not deliver meaningful value, split, reorder, or drop it. The agent is the product direction, not a proven result: where evaluation shows a deterministic step is simpler and as good, keep it deterministic.
+Remaining work, in order (this list supersedes the former v0.9–v1.0 increments, which are removed; the v0.8b criteria below still apply to step 2):
+
+1. **Complete one live Gemini investigation.** Re-run `python -m fintrace.agent` end-to-end against the current prompt/trace fix until one investigation completes without a transport or protocol error, and record the real trace, finding, and citations (not just an inconclusive attempt).
+2. **MCP integration (v0.8b, below).** Expose the six existing read-only tools through one local MCP server and client, reusing `harness.py` unchanged.
+3. **Connect the UI to the agent.** Add a FastAPI endpoint that runs the agent CLI's investigation path (not a reimplementation) for a loan id, and a separate "AI Investigation" action in the UI, next to the existing deterministic "Compare Balances" action, showing finding, cited records, execution/stop status, and a clear human-review indication. The deterministic comparison stays untouched.
+4. **Targeted legacy cleanup and architecture review.** Apply Keep / Replace / Retire / Remove to what's actually still duplicated (legacy `investigation.py` fixtures vs. `baseline.py`/SQLite data, `/investigate` vs. the agent path) only after confirming each one's active consumers (see v0.7b, Known limitations). Restructure folders only if this review finds real coupling that justifies it — no speculative refactor.
+5. **Minimal delivery scaffolding.** Docker for running the API/UI and generating the demo database, a GitHub Actions workflow running `pytest` (never the live Gemini suite), a short configuration reference (env vars already in `.env.example`), and a reproducible demo script/README section (generate DB → run API → open UI → run one agent CLI investigation).
+6. **Final validation.** Run the existing S1–S4 synthetic scenarios (and the legacy v0.6/v0.7 cases already evaluated) through the finished system once, end to end, and document results and limitations honestly in the README — including anywhere the agent adds no measurable value over the deterministic baseline.
+
+If a step does not deliver meaningful value, split, reorder, or drop it. The agent is the product direction, not a proven result: where evaluation shows a deterministic step is simpler and as good, keep it deterministic and say so.
 
 ## v0.7b acceptance criteria: realistic synthetic banking data
 
@@ -149,7 +154,7 @@ Out of scope for v0.8b: remote or hosted MCP servers, authentication, multiple s
 
 ## Evaluation strategy
 
-Every AI or agent increment is evaluated on two questions:
+This is a practical PoC, so evaluation stays small: existing synthetic cases, no new research programme. Every AI or agent increment is evaluated on two questions:
 
 1. **Practical value:** does the agent find correct, evidence-grounded explanations that the deterministic workflow does not?
 2. **Cost of autonomy:** does agent autonomy add unnecessary latency, cost, complexity, or errors (wrong tools, repeated calls, unsupported claims)?
@@ -184,9 +189,9 @@ For each significant refactor:
 
 Do not delete a legacy interface merely because a new one exists: first confirm its consumers. Do not maintain backward compatibility for hypothetical consumers.
 
-### Architecture assessment (v0.10)
+### Architecture review (remaining step 4)
 
-v0.10 is an assessment, not a mandatory refactor. If it finds no meaningful improvement, the current structure stays and the assessment is recorded as the outcome. Restructuring happens only after this review, not speculatively. Ports and Adapters are considered when actual external dependencies and application boundaries justify them, for example several real implementations behind the same boundary, or coupling that makes testing or change measurably harder. The current LLM boundary is a single plain callable; that stays until a concrete need appears. Avoid speculative interfaces, classes, and directories.
+This review is an assessment, not a mandatory refactor. If it finds no meaningful improvement, the current structure stays and the assessment is recorded as the outcome. Restructuring happens only after this review, not speculatively. Ports and Adapters are considered when actual external dependencies and application boundaries justify them, for example several real implementations behind the same boundary, or coupling that makes testing or change measurably harder. The current LLM boundary is a single plain callable; that stays until a concrete need appears. Avoid speculative interfaces, classes, and directories.
 
 ## Architectural decisions
 
@@ -220,7 +225,7 @@ Choice and reasoning: src/fintrace/. Tests run against the installed package, no
 Trade-offs and evidence: A one-time migration of imports, paths and README
   commands. Kept deliberately small: one flat package, no subpackages, no
   interfaces, no compatibility shims.
-Revisit when: v0.10 architecture assessment shows real coupling that a different
+Revisit when: the architecture review (remaining step 4) shows real coupling that a different
   structure would reduce.
 ```
 
