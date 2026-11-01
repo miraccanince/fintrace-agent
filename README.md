@@ -63,12 +63,13 @@ python -c "from fintrace.synthetic_data import generate_database_with_scenarios 
 Run the agent (needs a local Ollama server with `qwen3.5:9b` pulled; override with `OLLAMA_MODEL` / `OLLAMA_BASE_URL`; prints the report as JSON):
 
 ```bash
-python -m fintrace.agent LN-5008 --db /tmp/banking.db --max-tool-calls 8
+python -m fintrace.agent LN-5008 --db /tmp/banking.db --max-tool-calls 8          # tools in-process
+python -m fintrace.agent LN-5008 --db /tmp/banking.db --max-tool-calls 8 --mcp    # tools via a local MCP server
 ```
 
 The database holds 15 loans, six days of snapshots from `loan_system` and `risk_system`, and transactions from both systems and a payment gateway. Four loans carry known discrepancies (partial posting, failed batch posting, a reversal applied in one system, a fee posted in one system); the others reconcile. The report contains the stop reason, the tool-call trace, the finding, the cited record ids, and a deterministic comparison of the two systems' latest snapshots. Citations are only checked to have been retrieved in the same run; the explanation text is written by the model and is not verified, and a human must review every report.
 
-The agent has completed an end-to-end investigation of the partial-posting loan (`LN-5008`) with `qwen3.5:9b`: five sequential tool calls, a `possible_explanation` finding, and citations that match the scenario's expected evidence (report in `evals/results/s1_ollama_run.json`). This is a single run on a single scenario. A SQLite-native deterministic baseline (`src/fintrace/baseline.py`) exists for comparison, and the UI at `/ui` currently offers only the deterministic balance comparison.
+The agent has completed an end-to-end investigation of the partial-posting loan (`LN-5008`) with `qwen3.5:9b`: five sequential tool calls, a `possible_explanation` finding, and citations that match the scenario's expected evidence (report in `evals/results/s1_ollama_run.json`). This is a single run on a single scenario. The same tools can be reached through a local MCP server with `--mcp`. A SQLite-native deterministic baseline (`src/fintrace/baseline.py`) exists for comparison, and the UI at `/ui` currently offers only the deterministic balance comparison.
 
 ### LLM-assisted investigation (`/investigate`)
 
