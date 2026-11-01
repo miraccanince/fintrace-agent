@@ -30,6 +30,8 @@ from fintrace.banking_db import create_database, format_money
 
 DEFAULT_SEED = 42
 DEFAULT_LOAN_COUNT = 15
+DEMO_LOAN_COUNT = 1000
+EXTRA_PAYMENT_REFS_FROM = 1000  # payment references of added loans start above the scenario references
 AS_OF_DATE = date(2026, 10, 10)
 SNAPSHOT_DAYS = 6  # one batch run and snapshot per system for each of the last 6 days
 # A transaction booked after the first snapshot date changes the balance seen
@@ -74,9 +76,10 @@ def _run_id(system: str, day: date) -> str:
     return f"RUN-{_RUN_PREFIX[system]}-{day:%m%d}"
 
 
-def _make_loans(rng: random.Random, loan_count: int) -> list[dict[str, Any]]:
+def _make_loans(rng: random.Random, loan_count: int, first: int = 0) -> list[dict[str, Any]]:
+    """`loan_count` loans numbered from the `first`-th (0-based) loan onwards."""
     loans = []
-    for n in range(loan_count):
+    for n in range(first, first + loan_count):
         loans.append(
             {
                 "loan_id": f"LN-{5001 + n}",
@@ -121,13 +124,18 @@ def _append_transaction(
 
 
 def _make_transactions(
-    rng: random.Random, loans: list[dict[str, Any]], skip_loan_ids: frozenset[str] = frozenset()
+    rng: random.Random,
+    loans: list[dict[str, Any]],
+    skip_loan_ids: frozenset[str] = frozenset(),
+    rows: list[dict[str, Any]] | None = None,
+    first_payment: int = 0,
 ) -> list[dict[str, Any]]:
     """Every payment and fee is booked identically in both banking systems;
     payments also get a payment-gateway receipt with the same reference.
-    Loans in `skip_loan_ids` get no random transactions."""
-    rows: list[dict[str, Any]] = []
-    payment_count = 0
+    Loans in `skip_loan_ids` get no random transactions. New rows are appended
+    to `rows` if given, and payment references continue after `first_payment`."""
+    rows = [] if rows is None else rows
+    payment_count = first_payment
 
     first_snapshot_day = AS_OF_DATE - timedelta(days=SNAPSHOT_DAYS - 1)
     eligible = [i for i, loan in enumerate(loans) if loan["loan_id"] not in skip_loan_ids]
@@ -175,7 +183,7 @@ def _make_batch_runs(loan_count: int, partial_run: tuple[str, str] | None = None
 
     In this synthetic dataset every loan a run processes yields exactly one
     snapshot, so records_processed equals the number of snapshots linked to the
-    run (15 expected / 14 processed for the partial run). That is a property of
+    run (one record fewer processed than expected for the partial run). That is a property of
     this fixture, not a general rule about how batch jobs report their counts."""
     runs = []
     for day in _snapshot_dates():
@@ -200,10 +208,12 @@ def _make_snapshots(
     loans: list[dict[str, Any]],
     transactions: list[dict[str, Any]],
     missing: frozenset[tuple[str, str, str]] = frozenset(),
+    first_id: int = 0,
 ) -> list[dict[str, Any]]:
     """One snapshot per loan, system and day, each calculated with
     `compute_balance`. `missing` holds (loan_id, system, iso date) triples a
-    batch run did not process, which therefore have no snapshot."""
+    batch run did not process, which therefore have no snapshot. Snapshot ids
+    continue after `first_id`."""
     by_loan: dict[str, list[dict[str, Any]]] = {}
     for transaction in transactions:
         by_loan.setdefault(transaction["loan_id"], []).append(transaction)
@@ -219,7 +229,7 @@ def _make_snapshots(
                 )
                 snapshots.append(
                     {
-                        "snapshot_id": f"SN-{len(snapshots) + 1:05d}",
+                        "snapshot_id": f"SN-{first_id + len(snapshots) + 1:05d}",
                         "loan_id": loan["loan_id"],
                         "system": system,
                         "as_of_date": day.isoformat(),
@@ -510,18 +520,27 @@ def generate_database_with_scenarios(
     if ground_truth_path.exists():
         raise FileExistsError(f"ground truth file already exists: {ground_truth_path}")
 
+    # The first DEFAULT_LOAN_COUNT loans, the scenarios and every id are generated exactly
+    # as for a small dataset. Further loans are clean, appended afterwards from their own
+    # random stream, so a larger dataset keeps the same S1-S4 loans and record ids.
+    base_count = min(loan_count, DEFAULT_LOAN_COUNT)
     rng = random.Random(seed)
-    loans = _make_loans(rng, loan_count)
+    loans = _make_loans(rng, base_count)
     scenarios = _choose_scenario_loans(rng, loans)
     scenario_loan_ids = frozenset(s["loan"]["loan_id"] for s in scenarios.values())
     transactions = _make_transactions(rng, loans, scenario_loan_ids)
     _add_scenario_transactions(transactions, scenarios)
+    extra_loans = _make_loans(random.Random(f"{seed}:more-loans"), loan_count - base_count, first=base_count)
+    extra_rng = random.Random(f"{seed}:more-transactions")
+    _make_transactions(extra_rng, extra_loans, rows=transactions, first_payment=EXTRA_PAYMENT_REFS_FROM)
 
     # S2: loan_system's run on the as-of date is partial and skipped the S2 loan.
     s2_loan_id = scenarios["S2"]["loan"]["loan_id"]
     snapshots = _make_snapshots(
         loans, transactions, frozenset({(s2_loan_id, "loan_system", AS_OF_DATE.isoformat())})
     )
+    snapshots += _make_snapshots(extra_loans, transactions, first_id=len(snapshots))
+    loans = loans + extra_loans
     batch_runs = _make_batch_runs(loan_count, ("loan_system", _S2_ERROR_SUMMARY))
 
     _write_database(path, loans, batch_runs, transactions, snapshots)
@@ -536,9 +555,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--db", required=True, help="path of the SQLite database to create")
     parser.add_argument("--truth", required=True, help="path of the ground-truth JSON file to create (for evaluation only)")
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
+    parser.add_argument("--loans", type=int, default=DEMO_LOAN_COUNT, help="number of loans; four carry the controlled discrepancies")
     args = parser.parse_args(argv)
     try:
-        generate_database_with_scenarios(args.db, args.truth, seed=args.seed)
+        generate_database_with_scenarios(args.db, args.truth, seed=args.seed, loan_count=args.loans)
+    except ValueError as error:
+        print(error, file=sys.stderr)
+        return 2
     except FileExistsError as error:
         print(f"refusing to overwrite: {error}", file=sys.stderr)
         return 2

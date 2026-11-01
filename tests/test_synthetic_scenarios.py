@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from fintrace import banking_db
+from fintrace import banking_db, tools
 from fintrace.synthetic_data import generate_database_with_scenarios
 
 TABLES = {"loans", "batch_runs", "transactions", "balance_snapshots"}
@@ -476,7 +476,7 @@ def test_existing_files_are_never_overwritten(tmp_path):
 def test_the_cli_writes_the_same_database_and_ground_truth_as_the_generator(tmp_path, capsys):
     from fintrace import synthetic_data
 
-    code = synthetic_data.main(["--db", str(tmp_path / "cli.db"), "--truth", str(tmp_path / "cli.json"), "--seed", "42"])
+    code = synthetic_data.main(["--db", str(tmp_path / "cli.db"), "--truth", str(tmp_path / "cli.json"), "--seed", "42", "--loans", "15"])
     generate_database_with_scenarios(tmp_path / "api.db", tmp_path / "api.json", seed=42)
 
     assert code == 0 and "wrote" in capsys.readouterr().out
@@ -513,3 +513,67 @@ def synthetic_data_default_seed():
     from fintrace import synthetic_data
 
     return synthetic_data.DEFAULT_SEED
+
+
+# --- demo-sized dataset -------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def demo_db(tmp_path_factory):
+    directory = tmp_path_factory.mktemp("demo")
+    generate_database_with_scenarios(directory / "demo.db", directory / "demo.json", seed=42, loan_count=1000)
+    generate_database_with_scenarios(directory / "small.db", directory / "small.json", seed=42)
+    connection = banking_db.connect_readonly(directory / "demo.db")
+    yield {"dir": directory, "connection": connection, "truth": json.loads((directory / "demo.json").read_text())}
+    connection.close()
+
+
+def test_the_same_seed_gives_an_identical_1000_loan_dataset(demo_db, tmp_path):
+    generate_database_with_scenarios(tmp_path / "again.db", tmp_path / "again.json", seed=42, loan_count=1000)
+
+    dump = lambda path: "\n".join(sqlite3.connect(path).iterdump())
+    assert dump(tmp_path / "again.db") == dump(demo_db["dir"] / "demo.db")
+    assert (tmp_path / "again.json").read_text() == (demo_db["dir"] / "demo.json").read_text()
+
+
+def test_a_larger_dataset_keeps_the_same_scenarios_loans_and_record_ids(demo_db):
+    small = json.loads((demo_db["dir"] / "small.json").read_text())
+
+    assert demo_db["truth"]["loan_count"] == 1000 and small["loan_count"] == 15
+    assert demo_db["truth"]["scenarios"] == small["scenarios"]  # same loans, evidence ids and amounts
+    base = sqlite3.connect(demo_db["dir"] / "small.db")
+    for table, key in (("transactions", "transaction_id"), ("balance_snapshots", "snapshot_id")):
+        small_rows = base.execute(f"SELECT * FROM {table} ORDER BY {key}").fetchall()
+        demo_rows = demo_db["connection"].execute(
+            f"SELECT * FROM {table} WHERE loan_id IN (SELECT loan_id FROM loans ORDER BY loan_id LIMIT 15) ORDER BY {key}").fetchall()
+        assert [tuple(r) for r in demo_rows] == small_rows
+
+
+def test_exactly_four_of_the_1000_loans_have_a_discrepancy(demo_db):
+    execute = tools.make_executor(demo_db["connection"])
+    statuses = [execute("compare_latest_snapshots", {"loan_id": r[0]})["status"] for r in demo_db["connection"].execute("SELECT loan_id FROM loans")]
+
+    assert len(statuses) == 1000 and statuses.count("discrepancy") == 4 and statuses.count("match") == 996
+
+
+def test_the_1000_loan_dataset_keeps_its_data_invariants(demo_db):
+    db = demo_db["connection"]
+
+    assert db.execute("SELECT COUNT(DISTINCT loan_id) FROM loans").fetchone()[0] == 1000
+    assert db.execute("SELECT COUNT(*) FROM (SELECT payment_ref FROM transactions WHERE payment_ref IS NOT NULL "
+                      "GROUP BY payment_ref HAVING COUNT(DISTINCT loan_id) > 1)").fetchone()[0] == 0
+    # every run's records_processed equals the snapshots it produced; only the S2 run is short
+    runs = db.execute("SELECT r.records_expected, r.records_processed, r.status, COUNT(s.snapshot_id) FROM batch_runs r "
+                      "LEFT JOIN balance_snapshots s ON s.batch_run_id = r.run_id GROUP BY r.run_id").fetchall()
+    assert all(processed == snapshots for _, processed, _, snapshots in runs)
+    assert [(e, p) for e, p, status, _ in runs if status == "partial"] == [(1000, 999)]
+    assert all(e == 1000 for e, _, _, _ in runs)
+    assert db.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+def test_the_cli_defaults_to_the_1000_loan_demo_dataset(tmp_path):
+    from fintrace import synthetic_data
+
+    assert synthetic_data.main(["--db", str(tmp_path / "d.db"), "--truth", str(tmp_path / "d.json")]) == 0
+    assert banking_db.connect_readonly(tmp_path / "d.db").execute("SELECT COUNT(*) FROM loans").fetchone()[0] == 1000
+    assert synthetic_data.main(["--db", str(tmp_path / "e.db"), "--truth", str(tmp_path / "e.json"), "--loans", "3"]) == 2
