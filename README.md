@@ -57,7 +57,7 @@ The agent investigates one loan in a synthetic SQLite database. A local model (O
 Create a database and its ground-truth file (write them outside the repository, for example under `/tmp`; the ground truth is for evaluation only and is never readable by the agent):
 
 ```bash
-python -c "from fintrace.synthetic_data import generate_database_with_scenarios as g; g('/tmp/banking.db', '/tmp/ground_truth.json', seed=42)"
+python -m fintrace.synthetic_data --db /tmp/banking.db --truth /tmp/ground_truth.json --seed 42
 ```
 
 Run the agent (needs a local Ollama server with `qwen3.5:9b` pulled; override with `OLLAMA_MODEL` / `OLLAMA_BASE_URL`; prints the report as JSON):
@@ -91,7 +91,7 @@ pytest
 
 ## Known limitations
 
-- All data is synthetic. No command creates the database file; call `generate_database_with_scenarios` as shown above.
+- All data is synthetic.
 - No authentication on the API; it is meant to run locally.
 - `/compare` keeps everything in memory per call and accepts raw request bodies only.
 - The agent needs a local Ollama server and a model that fits in memory. Runs take roughly one to a few minutes depending on the machine.

@@ -468,3 +468,48 @@ def test_existing_files_are_never_overwritten(tmp_path):
     with pytest.raises(FileExistsError):
         generate_database_with_scenarios(tmp_path / "taken.db", tmp_path / "new.json")
     assert not (tmp_path / "new.json").exists()
+
+
+# --- command line ------------------------------------------------------------------
+
+
+def test_the_cli_writes_the_same_database_and_ground_truth_as_the_generator(tmp_path, capsys):
+    from fintrace import synthetic_data
+
+    code = synthetic_data.main(["--db", str(tmp_path / "cli.db"), "--truth", str(tmp_path / "cli.json"), "--seed", "42"])
+    generate_database_with_scenarios(tmp_path / "api.db", tmp_path / "api.json", seed=42)
+
+    assert code == 0 and "wrote" in capsys.readouterr().out
+    assert (tmp_path / "cli.json").read_text() == (tmp_path / "api.json").read_text()
+    dumps = ["\n".join(sqlite3.connect(tmp_path / name).iterdump()) for name in ("cli.db", "api.db")]
+    assert dumps[0] == dumps[1]
+
+
+def test_the_cli_refuses_to_overwrite_existing_files(tmp_path, capsys):
+    from fintrace import synthetic_data
+
+    db, truth = tmp_path / "keep.db", tmp_path / "keep.json"
+    db.write_text("existing")
+
+    code = synthetic_data.main(["--db", str(db), "--truth", str(truth)])
+
+    assert code == 2 and "refusing to overwrite" in capsys.readouterr().err
+    assert db.read_text() == "existing" and not truth.exists()
+
+
+def test_the_cli_runs_as_a_module_with_the_default_seed(tmp_path):
+    import subprocess
+    import sys
+
+    done = subprocess.run(
+        [sys.executable, "-m", "fintrace.synthetic_data", "--db", str(tmp_path / "m.db"), "--truth", str(tmp_path / "m.json")],
+        capture_output=True, text=True, timeout=60)
+
+    assert done.returncode == 0 and (tmp_path / "m.db").exists() and (tmp_path / "m.json").exists()
+    assert json.loads((tmp_path / "m.json").read_text())["seed"] == synthetic_data_default_seed()
+
+
+def synthetic_data_default_seed():
+    from fintrace import synthetic_data
+
+    return synthetic_data.DEFAULT_SEED

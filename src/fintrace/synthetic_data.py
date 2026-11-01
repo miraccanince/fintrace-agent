@@ -15,10 +15,12 @@ The same seed always produces the same output. All data is synthetic. This
 module is not imported by the query functions in `banking_db`.
 """
 
+import argparse
 import json
 import math
 import random
 import sqlite3
+import sys
 from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -525,3 +527,24 @@ def generate_database_with_scenarios(
     _write_database(path, loans, batch_runs, transactions, snapshots)
     ground_truth = _ground_truth(seed, loan_count, scenarios, snapshots)
     ground_truth_path.write_text(json.dumps(ground_truth, indent=2) + "\n")
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="fintrace.synthetic_data", description="Write the synthetic banking database and its ground-truth file."
+    )
+    parser.add_argument("--db", required=True, help="path of the SQLite database to create")
+    parser.add_argument("--truth", required=True, help="path of the ground-truth JSON file to create (for evaluation only)")
+    parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
+    args = parser.parse_args(argv)
+    try:
+        generate_database_with_scenarios(args.db, args.truth, seed=args.seed)
+    except FileExistsError as error:
+        print(f"refusing to overwrite: {error}", file=sys.stderr)
+        return 2
+    print(f"wrote {args.db} and {args.truth}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

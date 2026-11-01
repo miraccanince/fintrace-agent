@@ -118,6 +118,13 @@
   const statusEl = document.getElementById("status");
   const resultEl = document.getElementById("result");
 
+  function el(tag, text, className) {
+    const node = document.createElement(tag);
+    if (text !== undefined && text !== null) node.textContent = text;
+    if (className) node.className = className;
+    return node;
+  }
+
   function setStatus(text, isError) {
     statusEl.textContent = text || "";
     statusEl.className = isError ? "error" : "";
@@ -136,8 +143,41 @@
   }
 
   function snapshotRow(label, snapshot) {
-    if (!snapshot) return `<tr><td>${label}</td><td colspan="2">no snapshot</td></tr>`;
-    return `<tr><td>${label}</td><td>${formatMoney(snapshot.amount, snapshot.currency)}</td><td>${snapshot.as_of_date}</td></tr>`;
+    const row = el("tr");
+    row.append(el("td", label));
+    if (!snapshot) {
+      const cell = el("td", "no snapshot");
+      cell.colSpan = 2;
+      row.append(cell);
+    } else {
+      row.append(el("td", formatMoney(snapshot.amount, snapshot.currency)), el("td", snapshot.as_of_date));
+    }
+    return row;
+  }
+
+  function renderComparison(data) {
+    const currency = data.loan_system ? data.loan_system.currency : (data.risk_system ? data.risk_system.currency : null);
+    const table = el("table");
+    const header = el("tr");
+    ["System", "Amount", "As of"].forEach((name) => header.append(el("th", name)));
+    const thead = el("thead");
+    thead.append(header);
+    const tbody = el("tbody");
+    tbody.append(snapshotRow("loan_system", data.loan_system), snapshotRow("risk_system", data.risk_system));
+    table.append(thead, tbody);
+
+    const parts = [
+      el("span", data.status.replace("_", " "), data.status === "discrepancy" ? "badge discrepancy" : "badge"),
+      el("div", data.difference === null ? "—" : formatMoney(data.difference, currency), "difference"),
+    ];
+    if (data.lower_balance_system) parts.push(el("div", `Lower balance: ${data.lower_balance_system.replace("_", " ")}`, "note"));
+    parts.push(el("div", "Difference: loan_system minus risk_system. Each tool call is read-only; no financial record is changed.", "note"), table);
+    if (data.snapshot_dates_aligned === false) {
+      const note = el("p", undefined, "note");
+      note.append(el("span", "dates not aligned", "pill"), " the two snapshots are from different dates.");
+      parts.push(note);
+    }
+    resultEl.replaceChildren(...parts);
   }
 
   async function investigate() {
@@ -162,21 +202,7 @@
       }
 
       setStatus("", false);
-      const isDiscrepancy = data.status === "discrepancy";
-      resultEl.innerHTML = `
-        <span class="badge ${isDiscrepancy ? "discrepancy" : ""}">${data.status.replace("_", " ")}</span>
-        <div class="difference">${data.difference === null ? "—" : formatMoney(data.difference, data.loan_system ? data.loan_system.currency : (data.risk_system ? data.risk_system.currency : null))}</div>
-        ${data.lower_balance_system ? `<div class="note">Lower balance: ${data.lower_balance_system.replace("_", " ")}</div>` : ""}
-        <div class="note">Difference: loan_system minus risk_system. Each tool call is read-only; no financial record is changed.</div>
-        <table>
-          <thead><tr><th>System</th><th>Amount</th><th>As of</th></tr></thead>
-          <tbody>
-            ${snapshotRow("loan_system", data.loan_system)}
-            ${snapshotRow("risk_system", data.risk_system)}
-          </tbody>
-        </table>
-        ${data.snapshot_dates_aligned === false ? '<p class="note"><span class="pill">dates not aligned</span> the two snapshots are from different dates.</p>' : ""}
-      `;
+      renderComparison(data);
       resultEl.hidden = false;
     } catch (error) {
       setStatus("Could not reach the server.", true);
@@ -185,8 +211,7 @@
     }
   }
 
-  // --- AI investigation. Everything the model or tools produced is inserted with
-  // textContent, never innerHTML.
+  // --- AI investigation. Everything the model or tools produced is inserted as text.
   const aiButton = document.getElementById("ai-investigate");
   const aiCard = document.getElementById("ai-card");
   const aiStatus = document.getElementById("ai-status");
@@ -200,13 +225,6 @@
     model_error: "Model or server error",
     internal_validation_error: "Internal validation failed",
   };
-
-  function el(tag, text, className) {
-    const node = document.createElement(tag);
-    if (text !== undefined && text !== null) node.textContent = text;
-    if (className) node.className = className;
-    return node;
-  }
 
   function section(title, ...content) {
     const node = el("details");

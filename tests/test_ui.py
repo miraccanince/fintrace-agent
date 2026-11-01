@@ -1,3 +1,7 @@
+import json
+import shutil
+import subprocess
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -154,7 +158,7 @@ def test_model_generated_content_is_rendered_with_textcontent_only():
     page = (api.Path(api.__file__).parent / "static" / "index.html").read_text(encoding="utf-8")
     ai_code = page[page.index("// --- AI investigation"):page.index('button.addEventListener("click", investigate);')]
 
-    assert ".textContent" in ai_code and "innerHTML" not in ai_code.replace("never innerHTML", "")
+    assert ".textContent" in ai_code and "innerHTML" not in ai_code
     assert "insertAdjacentHTML" not in ai_code and "outerHTML" not in ai_code
 
 
@@ -216,3 +220,56 @@ def test_ai_result_keeps_citations_trace_and_technical_details_in_collapsible_se
     assert "technical.open = !complete" in ai_code  # an incomplete run shows its details straight away
     assert "Human review required" in ai_code and "did not finish" in ai_code and "No finding was produced" in ai_code
     assert "Stop reason: ${report.stop_reason}" in ai_code  # the raw code lives only in the technical details
+
+
+def test_the_page_never_injects_html_strings():
+    page = (api.Path(api.__file__).parent / "static" / "index.html").read_text(encoding="utf-8")
+
+    for sink in ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write"):
+        assert sink not in page
+
+
+NODE_RENDER = r"""
+const fs = require("fs"), vm = require("vm");
+class Node_ {
+  constructor(tag) { this.tag = tag; this.kids = []; this.className = ""; this._text = ""; }
+  set textContent(v) { this._text = String(v); this.kids = []; }
+  get textContent() { return this._text + this.kids.map((k) => k.textContent).join(""); }
+  append(...items) { items.forEach((i) => this.kids.push(typeof i === "string" ? Object.assign(new Node_("#text"), { _text: i }) : i)); }
+  replaceChildren(...items) { this.kids = []; this.append(...items); }
+  addEventListener() {}
+  set innerHTML(v) { throw new Error("innerHTML used"); }
+}
+const els = {};
+const document = { getElementById: (id) => (els[id] ??= new Node_(id)), createElement: (tag) => new Node_(tag) };
+const script = fs.readFileSync(process.argv[2], "utf8").match(/<script>([\s\S]*)<\/script>/)[1];
+const context = vm.createContext({ document, fetch() {}, setInterval() {}, clearInterval() {}, Number, Date, encodeURIComponent });
+vm.runInContext(script, context);
+vm.runInContext(`renderComparison(${process.argv[3]})`, context);
+const tags = new Set();
+const walk = (node) => { tags.add(node.tag); node.kids.forEach(walk); };
+walk(els["result"]);
+console.log(JSON.stringify({ text: els["result"].textContent, tags: [...tags] }));
+"""
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_compare_balances_shows_backend_values_as_text_never_as_markup(tmp_path):
+    page = api.Path(api.__file__).parent / "static" / "index.html"
+    script = tmp_path / "render.js"
+    script.write_text(NODE_RENDER)
+    hostile = "<img src=x onerror=alert(1)>"
+    data = {
+        "status": "discrepancy", "difference": "7000.00", "lower_balance_system": "<script>alert(1)</script>",
+        "loan_system": {"amount": "115000.00", "currency": "EUR", "as_of_date": hostile}, "risk_system": None,
+        "snapshot_dates_aligned": False,
+    }
+
+    done = subprocess.run(["node", str(script), str(page), json.dumps(data)], capture_output=True, text=True, timeout=30)
+
+    assert done.returncode == 0, done.stderr
+    rendered = json.loads(done.stdout)
+    assert hostile in rendered["text"] and "<script>alert(1)</script>" in rendered["text"]  # shown literally
+    assert set(rendered["tags"]) <= {"result", "span", "div", "table", "thead", "tbody", "tr", "th", "td", "p", "#text"}
+    for expected in ("discrepancy", "€7,000.00", "€115,000.00", "no snapshot", "dates not aligned"):
+        assert expected in rendered["text"]
