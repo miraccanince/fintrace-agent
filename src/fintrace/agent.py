@@ -3,7 +3,7 @@
 This module holds what is specific to talking to the model: the system prompt,
 turning the harness history into model messages, and turning the model's reply
 into a harness step. Policy (allowlist, budget, validation) stays in
-`harness.py`; the Gemini API call itself is in `gemini_adapter.py`.
+`harness.py`; the model call itself is in `ollama_adapter.py`.
 
 The model answers only through function calls: any tool the harness shows it,
 or `submit_final_answer`. A reply with no function call, or with more than one,
@@ -14,7 +14,6 @@ becomes an invalid step the harness rejects; nothing is silently discarded.
 
 import argparse
 import json
-import os
 import sys
 from typing import Any, Callable
 
@@ -29,6 +28,7 @@ Rules:
 - You have a limited number of tool calls. Stop when you can answer, or when more calls will not help.
 - Never calculate amounts yourself. Differences and sums come from compare_latest_snapshots and summarize_payment_refs.
 - A matching amount is correlation, not proof. Never claim a cause is confirmed.
+- Write the explanation in qualified language such as "may", "is consistent with" or "suggests". Never use definitive causal wording such as "is caused by", "caused by", "proves", "confirms" or "is due to".
 - Explain the observable accounting difference. Do not invent a business reason that the records do not show.
 - The finding is possible_explanation only if the records you retrieved support an explanation; otherwise insufficient_evidence.
 - Cite only record ids (TX-..., SN-..., RUN-...) that appeared in tool results you received.
@@ -55,62 +55,58 @@ FINAL_ANSWER_DECLARATION = {
 }
 
 
-def _contents(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    contents = []
-    call_id = None
+def _messages(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    messages = []
     for message in history:
         if message["role"] == "task":
             text = f"Investigate loan {message['loan_id']}. You may make at most {message['max_tool_calls']} tool calls."
-            contents.append({"role": "user", "parts": [{"text": text}]})
+            messages.append({"role": "user", "content": text})
         elif message["role"] == "tool_call":
             original = message.get("provider_content")
             if original is not None:
-                # Replay the model's own reply untouched: Gemini needs its thought_signature and call id.
-                contents.append(original)
-                call_id = next((getattr(p.function_call, "id", None) for p in original.parts if getattr(p, "function_call", None)), None)
+                messages.append(original)  # the model's own reply, replayed unchanged
             else:
-                call = {"name": message["tool"], "args": message["arguments"] if isinstance(message["arguments"], dict) else {}}
-                contents.append({"role": "model", "parts": [{"function_call": call}]})
-                call_id = None
+                arguments = message["arguments"] if isinstance(message["arguments"], dict) else {}
+                messages.append({"role": "assistant", "content": "", "tool_calls": [{"function": {"name": message["tool"], "arguments": arguments}}]})
         else:  # tool_result
             response = {
                 "outcome": message["outcome"],
                 "content": message["content"],
                 "remaining_tool_calls": message["remaining_tool_calls"],
             }
-            function_response = {"name": message["tool"], "response": response}
-            if call_id:
-                function_response["id"] = call_id
-            contents.append({"role": "user", "parts": [{"function_response": function_response}]})
-    return contents
+            messages.append({"role": "tool", "tool_name": message["tool"], "content": json.dumps(response)})
+    return messages
 
 
 def _to_step(response: Any) -> dict[str, Any]:
     """Map a model reply to a harness step. Anything that is not exactly one
     function call becomes an invalid step."""
-    try:
-        parts = response.candidates[0].content.parts or []
-    except (AttributeError, IndexError, TypeError):
-        return {"type": "invalid", "reason": "reply has no content"}
-    calls = [part.function_call for part in parts if getattr(part, "function_call", None)]
-    if len(calls) != 1:
-        names = [call.name for call in calls]
+    reply = response.get("message") if isinstance(response, dict) else None
+    if not isinstance(reply, dict):
+        return {"type": "invalid", "reason": "reply has no message"}
+    calls = reply.get("tool_calls") or []
+    if not isinstance(calls, list) or len(calls) != 1 or not isinstance(calls[0], dict):
+        names = [c.get("function", {}).get("name") for c in calls if isinstance(c, dict)] if isinstance(calls, list) else []
         return {"type": "invalid", "reason": f"expected exactly one function call, got {len(calls)}: {names}"}
 
-    call = calls[0]
-    arguments = dict(call.args or {})
-    if call.name == FINAL_ANSWER_TOOL:
+    function = calls[0].get("function")
+    if not isinstance(function, dict) or not isinstance(function.get("name"), str):
+        return {"type": "invalid", "reason": "function call has no name"}
+    name, arguments = function["name"], function.get("arguments") or {}
+    if name == FINAL_ANSWER_TOOL:
+        if not isinstance(arguments, dict):
+            return {"type": "invalid", "reason": "final answer arguments are not an object"}
         return {**arguments, "type": "final"}  # "type" last, so the model cannot override it
-    return {"type": "tool_call", "tool": call.name, "arguments": arguments, "provider_content": response.candidates[0].content}
+    return {"type": "tool_call", "tool": name, "arguments": arguments, "provider_content": reply}
 
 
 def make_generate_step(call_model: Callable[[list[dict], list[dict], str], Any]):
     """Build the harness's `generate_step` from a function that calls the model
-    with (contents, function declarations, system prompt)."""
+    with (messages, function declarations, system prompt)."""
 
     def generate_step(history: list[dict[str, Any]], visible_tools: dict[str, dict[str, Any]]) -> dict[str, Any]:
         declarations = [*visible_tools.values(), FINAL_ANSWER_DECLARATION]
-        return _to_step(call_model(_contents(history), declarations, SYSTEM_PROMPT))
+        return _to_step(call_model(_messages(history), declarations, SYSTEM_PROMPT))
 
     return generate_step
 
@@ -123,12 +119,9 @@ def main(argv: list[str] | None = None, call_model: Callable | None = None) -> i
     args = parser.parse_args(argv)
 
     if call_model is None:
-        from fintrace import gemini_adapter  # loads .env
+        from fintrace import ollama_adapter
 
-        if not os.environ.get("GEMINI_API_KEY"):
-            print("GEMINI_API_KEY is not set; set it in the environment or in .env", file=sys.stderr)
-            return 2
-        call_model = gemini_adapter.generate_with_tools
+        call_model = ollama_adapter.generate_with_tools
 
     try:
         connection = banking_db.connect_readonly(args.db)

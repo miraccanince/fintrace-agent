@@ -2,7 +2,7 @@
 
 **Evidence-Driven Financial Investigation**
 
-The goal of this project is an AI agent that investigates discrepancies across financial systems, traces supporting evidence, and helps analysts understand potential causes. A tool-using investigation agent is implemented and tested offline; its live validation against Gemini is not finished (see [FINTRACE_AGENT_ROADMAP.md](FINTRACE_AGENT_ROADMAP.md)). The project compares synthetic loan records from two systems, reports discrepancies as structured results, investigates them with a deterministic baseline and an LLM-assisted `/investigate` endpoint, and has an agent CLI that investigates one loan in a synthetic SQLite database — a small, portfolio-scale proof of concept, not a production banking tool.
+The goal of this project is an AI agent that investigates discrepancies across financial systems, traces supporting evidence, and helps analysts understand potential causes. A tool-using investigation agent runs locally on Ollama. The project compares synthetic loan records from two systems, reports discrepancies as structured results, investigates them with a deterministic baseline and an LLM-assisted `/investigate` endpoint, and has an agent CLI that investigates one loan in a synthetic SQLite database — a small, portfolio-scale proof of concept, not a production banking tool.
 
 ## What it does
 
@@ -52,7 +52,7 @@ Then `POST /compare` with a JSON body:
 
 ### Investigation agent (CLI)
 
-The agent investigates one loan in a synthetic SQLite database. Gemini chooses among six read-only tools; Python validates every call, limits the number of calls, and computes every number in the report.
+The agent investigates one loan in a synthetic SQLite database. A local model (Ollama, `qwen3.5:9b`) chooses among six read-only tools; Python validates every call, limits the number of calls, and computes every number in the report.
 
 Create a database and its ground-truth file (write them outside the repository, for example under `/tmp`; the ground truth is for evaluation only and is never readable by the agent):
 
@@ -60,7 +60,7 @@ Create a database and its ground-truth file (write them outside the repository, 
 python -c "from fintrace.synthetic_data import generate_database_with_scenarios as g; g('/tmp/banking.db', '/tmp/ground_truth.json', seed=42)"
 ```
 
-Run the agent (needs `GEMINI_API_KEY`; prints the report as JSON):
+Run the agent (needs a local Ollama server with `qwen3.5:9b` pulled; override with `OLLAMA_MODEL` / `OLLAMA_BASE_URL`; prints the report as JSON):
 
 ```bash
 python -m fintrace.agent LN-5008 --db /tmp/banking.db --max-tool-calls 8
@@ -68,7 +68,7 @@ python -m fintrace.agent LN-5008 --db /tmp/banking.db --max-tool-calls 8
 
 The database holds 15 loans, six days of snapshots from `loan_system` and `risk_system`, and transactions from both systems and a payment gateway. Four loans carry known discrepancies (partial posting, failed batch posting, a reversal applied in one system, a fee posted in one system); the others reconcile. The report contains the stop reason, the tool-call trace, the finding, the cited record ids, and a deterministic comparison of the two systems' latest snapshots. Citations are only checked to have been retrieved in the same run; the explanation text is written by the model and is not verified, and a human must review every report.
 
-Status: the agent is covered by offline tests only. No live investigation has completed yet: one S1 attempt was rejected because Gemini returned two function calls in one reply (the prompt now requires one call per response; not yet re-verified live), another hit a transient `503`, and an earlier one hit the free-tier daily quota. A SQLite-native deterministic baseline (`src/fintrace/baseline.py`) exists for comparison, and the UI at `/ui` currently offers only the deterministic balance comparison. Remaining work is listed in [FINTRACE_AGENT_ROADMAP.md](FINTRACE_AGENT_ROADMAP.md).
+The agent has completed an end-to-end investigation of the partial-posting loan (`LN-5008`) with `qwen3.5:9b`: five sequential tool calls, a `possible_explanation` finding, and citations that match the scenario's expected evidence (report in `evals/results/s1_ollama_run.json`). This is a single run on a single scenario. A SQLite-native deterministic baseline (`src/fintrace/baseline.py`) exists for comparison, and the UI at `/ui` currently offers only the deterministic balance comparison.
 
 ### LLM-assisted investigation (`/investigate`)
 
@@ -156,7 +156,7 @@ pytest
 - `/compare` accepts raw request bodies only; there is no endpoint to compare files already on the server.
 - `/investigate` and the v0.7 evaluation still use the small fixed fixtures in `src/fintrace/investigation.py` (`TRANSACTIONS`/`SYSTEM_UPDATES`) and `evals/eval_cases.py`, not the SQLite data. All data is synthetic.
 - No command creates the database file yet; call `generate_database_with_scenarios` as shown above.
-- Agent live validation is incomplete (see the agent section). No agent-versus-baseline comparison has been run yet; `/investigate` still uses the legacy fixtures, not the SQLite baseline.
+- The agent has been run live on one scenario only. No agent-versus-baseline comparison has been run yet; `/investigate` still uses the legacy fixtures, not the SQLite baseline.
 - `/investigate` has been exercised against a **single** live Gemini call (see Live verification above) — not a broad or repeated check. The pytest suite (322 tests) runs entirely offline against fake model callables.
 - The 5-case v0.6 evaluation is a single run, no retries/sampling across multiple calls per case to check consistency, and it happened to produce zero guardrail interventions — the upgrade-blocking guardrail itself is only exercised by `test_llm_investigation.py`'s deliberately-violating fake callables, not by a real model response in this repo.
 - The v0.6 evidence-traceability metric uses exact set equality between cited and expected references, which penalizes a model response that cites correct *additional* context (as case 1 did) the same as one that cites something wrong — a stricter "citations include expected, and extras are plausible context" check would be more accurate but wasn't built to keep this increment small.

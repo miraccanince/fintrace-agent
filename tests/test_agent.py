@@ -1,19 +1,17 @@
 import json
-from types import SimpleNamespace
-
+import httpx
 import pytest
-from google.genai import errors
 
-from fintrace import agent, gemini_adapter, harness, tools
+from fintrace import agent, harness, ollama_adapter, tools
 from fintrace.banking_db import connect_readonly
 from fintrace.synthetic_data import generate_database_with_scenarios
 
 
-def reply(*calls, text=None):
-    parts = [SimpleNamespace(function_call=SimpleNamespace(name=n, args=a), text=None) for n, a in calls]
-    if text:
-        parts.insert(0, SimpleNamespace(function_call=None, text=text))
-    return SimpleNamespace(candidates=[SimpleNamespace(content=SimpleNamespace(parts=parts))])
+def reply(*calls, text=None, extra=None):
+    message = {"role": "assistant", "content": text or "", **(extra or {})}
+    if calls:
+        message["tool_calls"] = [{"function": {"name": n, "arguments": a}} for n, a in calls]
+    return {"message": message}
 
 
 def scripted_model(*replies):
@@ -39,13 +37,13 @@ def db(tmp_path):
 
 
 def test_one_function_call_becomes_a_tool_call_step():
-    response = reply(("get_loan", {"loan_id": "LN-1"}), text=None)
+    response = reply(("get_loan", {"loan_id": "LN-1"}))
 
     step = agent._to_step(response)
 
     assert step == {
         "type": "tool_call", "tool": "get_loan", "arguments": {"loan_id": "LN-1"},
-        "provider_content": response.candidates[0].content,
+        "provider_content": response["message"],
     }
 
 
@@ -68,15 +66,21 @@ def test_submit_final_answer_becomes_a_final_step_and_cannot_override_the_type()
         reply(("submit_final_answer", {}), ("get_loan", {})),
         reply(text="I think it is a timing issue."),
         reply(),
-        SimpleNamespace(candidates=[]),
-        SimpleNamespace(candidates=None),
-        SimpleNamespace(),
+        {"message": None},
+        {"message": {"tool_calls": "get_loan"}},
+        {"message": {"tool_calls": [{"function": {"arguments": {}}}]}},
+        {},
+        None,
     ],
 )
 def test_anything_but_exactly_one_function_call_is_an_invalid_step(response):
     step = agent._to_step(response)
 
     assert step["type"] == "invalid" and step["reason"]
+
+
+def test_final_answer_with_non_object_arguments_is_an_invalid_step():
+    assert agent._to_step(reply(("submit_final_answer", "all done")))["type"] == "invalid"
 
 
 def test_multiple_function_calls_report_their_names_in_the_reason():
@@ -87,6 +91,14 @@ def test_multiple_function_calls_report_their_names_in_the_reason():
     assert "s3cr3t" not in step["reason"]
 
 
+def test_system_prompt_requires_qualified_wording_and_bans_definitive_causal_phrases():
+    prompt = agent.SYSTEM_PROMPT
+
+    assert "qualified language" in prompt
+    for phrase in ("is caused by", "proves", "confirms"):
+        assert f'"{phrase}"' in prompt  # listed as wording the model must not use
+
+
 def test_system_prompt_requires_exactly_one_function_call_per_response():
     assert "exactly one function call" in agent.SYSTEM_PROMPT
 
@@ -94,7 +106,7 @@ def test_system_prompt_requires_exactly_one_function_call_per_response():
 # --- history -> messages --------------------------------------------------------------------
 
 
-def test_history_is_rendered_as_alternating_model_and_user_messages():
+def test_history_is_rendered_as_chat_messages_with_tool_results_named_by_tool():
     history = [
         {"role": "task", "loan_id": "LN-1", "max_tool_calls": 8},
         {"role": "tool_call", "tool": "get_loan", "arguments": {"loan_id": "LN-1"}},
@@ -103,15 +115,15 @@ def test_history_is_rendered_as_alternating_model_and_user_messages():
         {"role": "tool_result", "tool": "bogus", "outcome": "rejected", "content": {"error": "tool not allowed: bogus"}, "remaining_tool_calls": 6},
     ]
 
-    contents = agent._contents(history)
+    messages = agent._messages(history)
 
-    assert [c["role"] for c in contents] == ["user", "model", "user", "model", "user"]
-    assert "LN-1" in contents[0]["parts"][0]["text"] and "8" in contents[0]["parts"][0]["text"]
-    assert contents[1]["parts"][0]["function_call"] == {"name": "get_loan", "args": {"loan_id": "LN-1"}}
-    assert contents[2]["parts"][0]["function_response"] == {
-        "name": "get_loan", "response": {"outcome": "ok", "content": {"found": True}, "remaining_tool_calls": 7}}
-    assert contents[3]["parts"][0]["function_call"]["args"] == {}
-    assert contents[4]["parts"][0]["function_response"]["response"]["outcome"] == "rejected"
+    assert [m["role"] for m in messages] == ["user", "assistant", "tool", "assistant", "tool"]
+    assert "LN-1" in messages[0]["content"] and "8" in messages[0]["content"]
+    assert messages[1]["tool_calls"] == [{"function": {"name": "get_loan", "arguments": {"loan_id": "LN-1"}}}]
+    assert messages[2]["tool_name"] == "get_loan"
+    assert json.loads(messages[2]["content"]) == {"outcome": "ok", "content": {"found": True}, "remaining_tool_calls": 7}
+    assert messages[3]["tool_calls"][0]["function"]["arguments"] == {}
+    assert json.loads(messages[4]["content"])["outcome"] == "rejected"
 
 
 def test_model_is_offered_the_visible_tools_plus_the_final_answer_function():
@@ -166,114 +178,105 @@ def test_a_reply_with_two_function_calls_is_rejected_by_the_harness(db):
     assert report["stop_reason"] == "invalid_model_output" and report["tool_calls"]["agent_requested"] == 0
 
 
-# --- provider retry ----------------------------------------------------------------------------------
+# --- Ollama adapter ----------------------------------------------------------------------------------
 
 
-class FakeClient:
-    outcomes: list = []
-    config = None
-    calls = 0
+class FakePost:
+    def __init__(self, outcome):
+        self.outcome, self.calls, self.url, self.kwargs = outcome, 0, None, None
 
-    def __init__(self):
-        self.models = SimpleNamespace(generate_content=self._generate)
-
-    def _generate(self, model, contents, config):
-        FakeClient.calls += 1
-        FakeClient.config = config
-        outcome = FakeClient.outcomes.pop(0)
-        if isinstance(outcome, Exception):
-            raise outcome
-        return outcome
+    def __call__(self, url, **kwargs):
+        self.calls, self.url, self.kwargs = self.calls + 1, url, kwargs
+        if isinstance(self.outcome, Exception):
+            raise self.outcome
+        return self.outcome
 
 
-@pytest.fixture
-def fake_gemini(monkeypatch):
-    FakeClient.outcomes, FakeClient.calls, FakeClient.config = [], 0, None
-    monkeypatch.setattr(gemini_adapter.genai, "Client", FakeClient)
-    monkeypatch.setattr(gemini_adapter, "RETRY_DELAY_SECONDS", 0)
-    return FakeClient
+class FakeHttpResponse:
+    def __init__(self, payload, status=200):
+        self.payload, self.status = payload, status
+
+    def raise_for_status(self):
+        if self.status >= 400:
+            raise httpx.HTTPStatusError("bad", request=httpx.Request("POST", "http://x"), response=httpx.Response(self.status))
+
+    def json(self):
+        return self.payload
 
 
-def server_error():
-    return errors.ServerError(503, {"error": {"message": "busy", "status": "UNAVAILABLE"}})
+def call_adapter(monkeypatch, outcome):
+    post = FakePost(outcome)
+    monkeypatch.setattr(ollama_adapter.httpx, "post", post)
+    result = ollama_adapter.generate_with_tools(
+        [{"role": "user", "content": "hi"}], [dict(tools.contracts()["get_loan"])], "system text")
+    return result, post
 
 
-def call_adapter():
-    return gemini_adapter.generate_with_tools(
-        [{"role": "user", "parts": [{"text": "hi"}]}], [dict(tools.contracts()["get_loan"])], "system text")
+def test_request_uses_native_chat_with_context_timeout_system_message_and_tools(monkeypatch):
+    result, post = call_adapter(monkeypatch, FakeHttpResponse({"message": {"content": "ok"}}))
+
+    body = post.kwargs["json"]
+    assert result == {"message": {"content": "ok"}}
+    assert post.url == f"{ollama_adapter.BASE_URL}/api/chat" and post.url.endswith("/api/chat")
+    assert post.kwargs["timeout"] == 120
+    assert body["options"] == {"num_ctx": 8192} and body["stream"] is False and body["model"] == ollama_adapter.MODEL
+    assert body["messages"] == [{"role": "system", "content": "system text"}, {"role": "user", "content": "hi"}]
+    assert [t["function"]["name"] for t in body["tools"]] == ["get_loan"]
+    assert body["tools"][0]["type"] == "function" and "parameters" in body["tools"][0]["function"]
 
 
-def rate_limit(delay):
-    details = [{"@type": "type.googleapis.com/google.rpc.Help"}]
-    if delay is not None:
-        details.append({"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": delay})
-    return errors.ClientError(429, {"error": {"code": 429, "message": "slow", "status": "RESOURCE_EXHAUSTED", "details": details}})
+@pytest.mark.parametrize("failure", [httpx.ReadTimeout("timed out"), httpx.ConnectError("server down")])
+def test_transport_failures_are_raised_once_not_retried(monkeypatch, failure):
+    post = FakePost(failure)
+    monkeypatch.setattr(ollama_adapter.httpx, "post", post)
+
+    with pytest.raises(type(failure)):
+        ollama_adapter.generate_with_tools([], [], "s")
+    assert post.calls == 1
 
 
-def test_agent_requests_carry_a_60_second_timeout_and_a_timeout_is_not_retried(fake_gemini):
-    import httpx
-
-    fake_gemini.outcomes = [httpx.ReadTimeout("timed out"), "reply"]
-
-    with pytest.raises(httpx.ReadTimeout):
-        call_adapter()
-
-    assert fake_gemini.config.http_options.timeout == 60_000
-    assert fake_gemini.calls == 1
+def test_an_http_error_status_is_raised(monkeypatch):
+    with pytest.raises(httpx.HTTPStatusError):
+        call_adapter(monkeypatch, FakeHttpResponse({}, status=500))
 
 
-def test_transient_errors_are_retried_up_to_three_attempts(fake_gemini):
-    fake_gemini.outcomes = [server_error(), rate_limit("0s"), "reply"]
+def test_harness_reports_a_timeout_as_a_model_error(db, monkeypatch):
+    monkeypatch.setattr(ollama_adapter.httpx, "post", FakePost(httpx.ReadTimeout("timed out")))
+    connection = connect_readonly(db["path"])
+    try:
+        report = harness.run_investigation(
+            db["truth"]["S1"]["loan_id"], agent.make_generate_step(ollama_adapter.generate_with_tools), tools.make_executor(connection))
+    finally:
+        connection.close()
 
-    assert call_adapter() == "reply" and fake_gemini.calls == 3
-
-
-@pytest.mark.parametrize("delay", ["31423s", "61s", None, "soon"])
-def test_a_429_without_a_short_requested_delay_is_not_retried(fake_gemini, delay):
-    fake_gemini.outcomes = [rate_limit(delay), "never reached"]
-
-    with pytest.raises(errors.ClientError):
-        call_adapter()
-    assert fake_gemini.calls == 1
+    assert report["stop_reason"] == "model_error" and "ReadTimeout" in report["error"]
 
 
-def test_a_short_429_waits_at_least_the_requested_delay(fake_gemini, monkeypatch):
-    waits = []
-    monkeypatch.setattr(gemini_adapter.time, "sleep", waits.append)
-    monkeypatch.setattr(gemini_adapter, "RETRY_DELAY_SECONDS", 5)
-    fake_gemini.outcomes = [rate_limit("12s"), rate_limit("1s"), server_error(), "x"]
-
-    with pytest.raises(errors.ServerError):
-        call_adapter()
-    assert waits == [12.0, 5]  # the requested 12 s, then the 5 s floor for a 1 s request
+# --- the model's own reply is replayed unchanged ---------------------------------------------------
 
 
-def test_the_third_transient_failure_is_raised(fake_gemini):
-    fake_gemini.outcomes = [server_error(), server_error(), server_error()]
+def test_the_models_reply_is_replayed_unchanged_in_the_next_request(db):
+    loan_id = db["truth"]["S1"]["loan_id"]
+    answer = {"finding": "insufficient_evidence", "explanation": "x", "evidence_references": []}
+    first = reply(("get_loan", {"loan_id": loan_id}), extra={"thinking": "look at the loan first"})
 
-    with pytest.raises(errors.ServerError):
-        call_adapter()
-    assert fake_gemini.calls == 3
+    report, model = run(db, "S1", [first, reply(("submit_final_answer", answer))])
 
-
-@pytest.mark.parametrize("error", [errors.ClientError(400, {"error": {"message": "bad", "status": "INVALID_ARGUMENT"}}), ValueError("no key")])
-def test_non_transient_errors_are_not_retried(fake_gemini, error):
-    fake_gemini.outcomes = [error, "never reached"]
-
-    with pytest.raises(type(error)):
-        call_adapter()
-    assert fake_gemini.calls == 1
+    assert report["stop_reason"] == "final_answer"
+    replayed = model.seen[1]["contents"][1]
+    assert replayed == first["message"] and replayed is not first["message"]  # equal, though the harness deep-copies history
+    assert replayed["thinking"] == "look at the loan first"
+    result = model.seen[1]["contents"][2]
+    assert result["role"] == "tool" and result["tool_name"] == "get_loan"
 
 
-def test_automatic_function_calling_is_disabled_and_declarations_are_sent(fake_gemini):
-    fake_gemini.outcomes = ["reply"]
+def test_history_without_provider_content_is_rebuilt_unsigned():
+    messages = agent._messages([
+        {"role": "task", "loan_id": "LN-1", "max_tool_calls": 8},
+        {"role": "tool_call", "tool": "get_loan", "arguments": {}},
+    ])
 
-    call_adapter()
-
-    config = fake_gemini.config
-    assert config.automatic_function_calling.disable is True
-    assert config.system_instruction == "system text"
-    assert [d.name for d in config.tools[0].function_declarations] == ["get_loan"]
+    assert messages[1] == {"role": "assistant", "content": "", "tool_calls": [{"function": {"name": "get_loan", "arguments": {}}}]}
 
 
 # --- CLI --------------------------------------------------------------------------------------------------
@@ -308,68 +311,12 @@ def test_cli_reports_a_missing_database(tmp_path, capsys):
     assert not (tmp_path / "missing.db").exists()
 
 
-def test_cli_fails_clearly_without_an_api_key_and_prints_no_secret(db, capsys, monkeypatch):
-    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+def test_cli_uses_the_ollama_adapter_by_default(db, capsys, monkeypatch):
+    loan_id = db["truth"]["S4"]["loan_id"]
+    final = {"finding": "insufficient_evidence", "explanation": "x", "evidence_references": []}
+    model = scripted_model(reply(("submit_final_answer", final)))
+    monkeypatch.setattr(ollama_adapter, "generate_with_tools", model)
 
-    code = agent.main(["LN-1", "--db", str(db["path"])])
+    code = agent.main([loan_id, "--db", str(db["path"])])
 
-    captured = capsys.readouterr()
-    assert code == 2 and captured.out == ""
-    assert "GEMINI_API_KEY is not set" in captured.err
-    assert "=" not in captured.err.split("GEMINI_API_KEY")[1]  # names the variable, shows no value
-
-
-# --- signed Gemini replies are replayed unchanged ---------------------------------------------
-
-
-def signed_reply(name, args, call_id, signature):
-    from google.genai import types
-
-    content = types.Content(
-        role="model",
-        parts=[types.Part(function_call=types.FunctionCall(name=name, args=args, id=call_id), thought_signature=signature)],
-    )
-    return SimpleNamespace(candidates=[SimpleNamespace(content=content)])
-
-
-def test_signed_function_call_is_replayed_with_its_signature_and_id_in_the_next_request(db):
-    loan_id = db["truth"]["S1"]["loan_id"]
-    answer = {"finding": "insufficient_evidence", "explanation": "x", "evidence_references": []}
-    first = signed_reply("get_loan", {"loan_id": loan_id}, "call-1", b"sig-1")
-
-    report, model = run(db, "S1", [first, reply(("submit_final_answer", answer))])
-
-    assert report["stop_reason"] == "final_answer"
-    replayed = model.seen[1]["contents"][1]
-    assert replayed is not first.candidates[0].content  # the harness deep-copies history
-    assert replayed == first.candidates[0].content
-    assert replayed.parts[0].thought_signature == b"sig-1"
-    assert replayed.parts[0].function_call.id == "call-1"
-    result = model.seen[1]["contents"][2]["parts"][0]["function_response"]
-    assert result["name"] == "get_loan" and result["id"] == "call-1"
-
-
-def test_each_signed_call_keeps_its_own_signature_across_several_requests(db):
-    loan_id = db["truth"]["S1"]["loan_id"]
-    answer = {"finding": "insufficient_evidence", "explanation": "x", "evidence_references": []}
-
-    _, model = run(db, "S1", [
-        signed_reply("get_loan", {"loan_id": loan_id}, "call-1", b"sig-1"),
-        signed_reply("compare_latest_snapshots", {"loan_id": loan_id}, "call-2", b"sig-2"),
-        reply(("submit_final_answer", answer)),
-    ])
-
-    contents = model.seen[2]["contents"]
-    assert [c.parts[0].thought_signature for c in (contents[1], contents[3])] == [b"sig-1", b"sig-2"]
-    assert [contents[i]["parts"][0]["function_response"]["id"] for i in (2, 4)] == ["call-1", "call-2"]
-
-
-def test_unsigned_history_without_provider_content_gets_no_invented_signature_or_id():
-    contents = agent._contents([
-        {"role": "task", "loan_id": "LN-1", "max_tool_calls": 8},
-        {"role": "tool_call", "tool": "get_loan", "arguments": {}},
-        {"role": "tool_result", "tool": "get_loan", "outcome": "ok", "content": {}, "remaining_tool_calls": 7},
-    ])
-
-    assert "thought_signature" not in contents[1]["parts"][0]
-    assert "id" not in contents[2]["parts"][0]["function_response"]
+    assert code == 0 and json.loads(capsys.readouterr().out)["stop_reason"] == "final_answer" and len(model.seen) == 1
