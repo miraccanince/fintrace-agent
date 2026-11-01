@@ -167,10 +167,10 @@
     table.append(thead, tbody);
 
     const parts = [
-      el("span", data.status.replace("_", " "), data.status === "discrepancy" ? "badge discrepancy" : "badge"),
+      el("span", data.status.replaceAll("_", " "), data.status === "discrepancy" ? "badge discrepancy" : "badge"),
       el("div", data.difference === null ? "—" : formatMoney(data.difference, currency), "difference"),
     ];
-    if (data.lower_balance_system) parts.push(el("div", `Lower balance: ${data.lower_balance_system.replace("_", " ")}`, "note"));
+    if (data.lower_balance_system) parts.push(el("div", `Lower balance: ${data.lower_balance_system.replaceAll("_", " ")}`, "note"));
     parts.push(el("div", "Difference: loan_system minus risk_system. Each tool call is read-only; no financial record is changed.", "note"), table);
     if (data.snapshot_dates_aligned === false) {
       const note = el("p", undefined, "note");

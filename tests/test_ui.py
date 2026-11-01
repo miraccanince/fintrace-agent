@@ -260,7 +260,7 @@ def test_compare_balances_shows_backend_values_as_text_never_as_markup(tmp_path)
     script.write_text(NODE_RENDER)
     hostile = "<img src=x onerror=alert(1)>"
     data = {
-        "status": "discrepancy", "difference": "7000.00", "lower_balance_system": "<script>alert(1)</script>",
+        "status": "missing_in_a", "difference": "7000.00", "lower_balance_system": "<script>alert(1)</script>",
         "loan_system": {"amount": "115000.00", "currency": "EUR", "as_of_date": hostile}, "risk_system": None,
         "snapshot_dates_aligned": False,
     }
@@ -271,5 +271,5 @@ def test_compare_balances_shows_backend_values_as_text_never_as_markup(tmp_path)
     rendered = json.loads(done.stdout)
     assert hostile in rendered["text"] and "<script>alert(1)</script>" in rendered["text"]  # shown literally
     assert set(rendered["tags"]) <= {"result", "span", "div", "table", "thead", "tbody", "tr", "th", "td", "p", "#text"}
-    for expected in ("discrepancy", "€7,000.00", "€115,000.00", "no snapshot", "dates not aligned"):
+    for expected in ("missing in a", "€7,000.00", "€115,000.00", "no snapshot", "dates not aligned"):
         assert expected in rendered["text"]
