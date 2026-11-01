@@ -74,6 +74,18 @@ def test_anything_but_exactly_one_function_call_is_an_invalid_step(response):
     assert step["type"] == "invalid" and step["reason"]
 
 
+def test_multiple_function_calls_report_their_names_in_the_reason():
+    step = agent._to_step(reply(("get_loan", {"loan_id": "LN-1", "secret": "s3cr3t"}), ("get_transactions", {})))
+
+    assert step["type"] == "invalid"
+    assert "get_loan" in step["reason"] and "get_transactions" in step["reason"]
+    assert "s3cr3t" not in step["reason"]
+
+
+def test_system_prompt_requires_exactly_one_function_call_per_response():
+    assert "exactly one function call" in agent.SYSTEM_PROMPT
+
+
 # --- history -> messages --------------------------------------------------------------------
 
 

@@ -33,6 +33,7 @@ Rules:
 - The finding is possible_explanation only if the records you retrieved support an explanation; otherwise insufficient_evidence.
 - Cite only record ids (TX-..., SN-..., RUN-...) that appeared in tool results you received.
 - Finish by calling submit_final_answer. A human reviews every answer.
+- Make exactly one function call per response. Never return more than one function call in the same response.
 """
 
 FINAL_ANSWER_DECLARATION = {
@@ -82,7 +83,8 @@ def _to_step(response: Any) -> dict[str, Any]:
         return {"type": "invalid", "reason": "reply has no content"}
     calls = [part.function_call for part in parts if getattr(part, "function_call", None)]
     if len(calls) != 1:
-        return {"type": "invalid", "reason": f"expected exactly one function call, got {len(calls)}"}
+        names = [call.name for call in calls]
+        return {"type": "invalid", "reason": f"expected exactly one function call, got {len(calls)}: {names}"}
 
     call = calls[0]
     arguments = dict(call.args or {})
