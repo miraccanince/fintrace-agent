@@ -106,8 +106,37 @@ def test_a_batch_with_an_unnamed_call_is_invalid():
     assert agent._to_step(response)["type"] == "invalid"
 
 
+def test_system_prompt_asks_for_a_short_plain_explanation_without_record_ids_in_prose():
+    prompt = agent.SYSTEM_PROMPT
+
+    assert "about 60 words in at most 3 short sentences" in prompt and "plain English" in prompt
+    assert "not in the explanation text" in prompt
+    description = agent.FINAL_ANSWER_DECLARATION["parameters"]["properties"]["explanation"]["description"]
+    assert "3 short sentences" in description and "no record ids" in description
+
+
+def test_system_prompt_limits_citations_to_retrieved_records():
+    prompt = agent.SYSTEM_PROMPT
+
+    assert "ids of records that a tool returned as records" in prompt
+    assert "transaction_id (TX-...)" in prompt and "snapshot_id (SN-...)" in prompt and "run_id (RUN-...)" in prompt
+    assert "Do not cite payment references (PAY-...)" in prompt
+    assert "batch_run_id, unless you retrieved that record" in prompt
+
+
+def test_system_prompt_forbids_blaming_a_loan_for_a_batch_run_it_is_not_linked_to():
+    prompt = agent.SYSTEM_PROMPT
+
+    assert "covers many loans" in prompt
+    assert "unless a retrieved record of this loan references that run" in prompt
+
+
+def test_system_prompt_asks_to_stop_once_the_evidence_is_enough():
+    assert "as soon as the records you retrieved are enough" in agent.SYSTEM_PROMPT
+
+
 def test_system_prompt_allows_ordered_batches_and_requires_the_final_answer_alone():
-    assert "several tool calls in one response" in agent.SYSTEM_PROMPT
+    assert "independent lookups together in one response" in agent.SYSTEM_PROMPT
     assert "run in order" in agent.SYSTEM_PROMPT and "submit_final_answer alone" in agent.SYSTEM_PROMPT
 
 
@@ -148,7 +177,8 @@ def test_model_is_offered_the_visible_tools_plus_the_final_answer_function():
 
 
 def test_system_prompt_is_generic_not_scenario_specific():
-    for word in ("S1", "S2", "S3", "S4", "PAY-", "LN-5", "partial posting", "reversal", "batch"):
+    # "batch run" is a generic tool concept (get_batch_runs); "PAY-" appears only to say what must not be cited.
+    for word in ("S1", "S2", "S3", "S4", "LN-5", "partial posting", "reversal", "failed batch", "timeout"):
         assert word not in agent.SYSTEM_PROMPT
 
 
