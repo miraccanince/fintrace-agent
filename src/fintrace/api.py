@@ -13,8 +13,6 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from fintrace import agent, banking_db, ollama_adapter, tools
-from fintrace.gemini_adapter import generate_finding as gemini_generate_finding
-from fintrace.llm_investigation import InvalidLLMFinding, generate_llm_finding
 from fintrace.compare import compare_datasets, parse_amount
 
 app = FastAPI()
@@ -123,34 +121,3 @@ def loan_investigation(loan_id: str, call_model=Depends(get_agent_call_model)) -
         yield json.dumps(pending.result()).encode()
 
     return StreamingResponse(body(), media_type="application/json")
-
-
-class InvestigateRequest(BaseModel):
-    loan_id: str
-    amount_a: str
-    amount_b: str
-    system_a: str
-    system_b: str
-
-
-def get_llm_generate_finding():
-    return gemini_generate_finding
-
-
-@app.post("/investigate")
-def investigate(
-    request: InvestigateRequest, generate_finding=Depends(get_llm_generate_finding)
-) -> dict:
-    try:
-        return generate_llm_finding(
-            loan_id=request.loan_id,
-            amount_a=parse_amount(request.amount_a),
-            amount_b=parse_amount(request.amount_b),
-            system_a=request.system_a,
-            system_b=request.system_b,
-            generate_finding=generate_finding,
-        )
-    except InvalidLLMFinding as error:
-        raise HTTPException(status_code=502, detail=str(error)) from error
-    except ValueError as error:
-        raise HTTPException(status_code=422, detail=str(error)) from error

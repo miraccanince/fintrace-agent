@@ -386,12 +386,9 @@ def _ground_truth(
         "as_of_date": AS_OF_DATE.isoformat(),
         "loan_count": loan_count,
         "field_notes": {
-            "expected_baseline_finding": (
-                "What the current deterministic implementation (investigate_discrepancy) returns for this loan."
-            ),
             "expected_investigation_outcome": (
-                "What the complete evidence in the database supports. It can differ from the baseline: "
-                "for S1 the baseline finds no single matching payment, yet the evidence supports a possible explanation."
+                "What the complete evidence in the database supports: possible_explanation when the records "
+                "support an explanation of the observable difference, insufficient_evidence otherwise."
             ),
         },
         "scenarios": [
@@ -405,8 +402,6 @@ def _ground_truth(
                     "but loan_system posted only 5000.00 of it. 12000.00 - 5000.00 = 7000.00, the difference."
                 ),
                 expected_investigation_outcome="possible_explanation",
-                expected_baseline_finding="insufficient_evidence",
-                baseline_note="No single payment of the difference exists in risk_system.",
                 required_evidence=[t["S1"]["gateway"], t["S1"]["risk"], t["S1"]["loan"], s("S1", "loan_system", "10-10"), s("S1", "risk_system", "10-10")],
                 misleading_explanation=None,
                 contradicting_evidence=[],
@@ -432,11 +427,6 @@ def _ground_truth(
                     "already reflects the payment. The two snapshots are not aligned in time."
                 ),
                 expected_investigation_outcome="possible_explanation",
-                expected_baseline_finding="possible_explanation",
-                baseline_note=(
-                    "The baseline finds the 8000.00 payment in risk_system but cannot see the failed "
-                    "posting, the batch failure, or the misaligned snapshot dates."
-                ),
                 required_evidence=[t["S2"]["loan_failed"], run_s2, t["S2"]["risk"], t["S2"]["gateway"], s("S2", "loan_system", "10-09"), s("S2", "risk_system", "10-10")],
                 misleading_explanation=None,
                 contradicting_evidence=[],
@@ -462,8 +452,6 @@ def _ground_truth(
                     "loan_system applied the same payment, so it cannot explain the difference."
                 ),
                 expected_investigation_outcome="possible_explanation",
-                expected_baseline_finding="possible_explanation",
-                baseline_note="The baseline accepts the 8000.00 payment in risk_system as the explanation.",
                 required_evidence=[t["S3"]["loan"], t["S3"]["risk"], t["S3"]["gateway_reversal"], t["S3"]["loan_reversal"], s("S3", "loan_system", "10-10"), s("S3", "risk_system", "10-10")],
                 misleading_explanation="the 8000.00 payment in risk_system explains why risk_system is lower",
                 contradicting_evidence=[t["S3"]["loan"], t["S3"]["loan_reversal"], t["S3"]["gateway_reversal"]],
@@ -487,8 +475,6 @@ def _ground_truth(
                     "risk_system's balance is 4500.00 higher. This is the observable accounting difference."
                 ),
                 expected_investigation_outcome="insufficient_evidence",
-                expected_baseline_finding="insufficient_evidence",
-                baseline_note="Only payments are matched, and no 4500.00 payment exists in loan_system.",
                 required_evidence=[t["S4"]["risk_fee"], s("S4", "loan_system", "10-10"), s("S4", "risk_system", "10-10")],
                 misleading_explanation=None,
                 contradicting_evidence=[],

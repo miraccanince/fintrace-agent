@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from fintrace import banking_db, investigation
+from fintrace import banking_db
 from fintrace.synthetic_data import generate_database_with_scenarios
 
 TABLES = {"loans", "batch_runs", "transactions", "balance_snapshots"}
@@ -313,7 +313,7 @@ def test_scenario_data_still_has_balance_changing_activity_across_most_loans(gen
 
 REQUIRED_KEYS = {
     "scenario_id", "loan_id", "injected_fault", "balance_difference_driver", "business_cause",
-    "expected_accounting_explanation", "expected_investigation_outcome", "expected_baseline_finding", "baseline_note",
+    "expected_accounting_explanation", "expected_investigation_outcome",
     "required_evidence", "misleading_explanation", "contradicting_evidence", "known", "cannot_conclude",
     "latest_snapshots", "snapshot_dates_aligned", "expected_difference", "lower_balance_system",
     "observable_difference_must_be_explained",
@@ -332,14 +332,12 @@ def test_ground_truth_has_the_agreed_fields_for_every_scenario(generated):
     assert s3["misleading_explanation"] and len(s3["contradicting_evidence"]) == 3
 
 
-def test_baseline_finding_and_investigation_outcome_are_separate_fields(generated):
+def test_ground_truth_states_the_expected_investigation_outcome_per_scenario(generated):
     entries = {e["scenario_id"]: e for e in generated["truth"]["scenarios"]}
 
     assert all("expected_finding" not in e for e in entries.values())
-    assert set(generated["truth"]["field_notes"]) == {"expected_baseline_finding", "expected_investigation_outcome"}
-    # S1: the baseline finds no single 7000.00 payment, but the evidence supports an explanation.
-    assert entries["S1"]["expected_baseline_finding"] == "insufficient_evidence"
-    assert entries["S1"]["expected_investigation_outcome"] == "possible_explanation"
+    assert set(generated["truth"]["field_notes"]) == {"expected_investigation_outcome"}
+    assert all("expected_baseline_finding" not in e and "baseline_note" not in e for e in entries.values())
     assert {sid: e["expected_investigation_outcome"] for sid, e in entries.items()} == {
         "S1": "possible_explanation", "S2": "possible_explanation",
         "S3": "possible_explanation", "S4": "insufficient_evidence",
@@ -384,28 +382,6 @@ def test_ground_truth_latest_snapshots_and_differences_match_the_database(genera
         loan_amount = Decimal(entry["latest_snapshots"]["loan_system"]["amount"])
         risk_amount = Decimal(entry["latest_snapshots"]["risk_system"]["amount"])
         assert Decimal(entry["expected_difference"]) == loan_amount - risk_amount
-
-
-def test_expected_baseline_findings_match_the_real_baseline_rule(generated, monkeypatch):
-    raw = generated["raw"]
-    rows = [
-        {"loan_id": r["loan_id"], "date": r["booking_date"], "system": r["system"], "type": r["type"], "amount": Decimal(r["amount"])}
-        for r in raw.execute("SELECT * FROM transactions ORDER BY transaction_id")
-    ]
-    monkeypatch.setattr(investigation, "TRANSACTIONS", rows)
-    monkeypatch.setattr(investigation, "SYSTEM_UPDATES", [])
-
-    for entry in generated["truth"]["scenarios"]:
-        snaps = entry["latest_snapshots"]
-        result = investigation.investigate_discrepancy(
-            entry["loan_id"],
-            Decimal(snaps["loan_system"]["amount"]),
-            Decimal(snaps["risk_system"]["amount"]),
-            "loan_system",
-            "risk_system",
-        )
-        assert result["finding"] == entry["expected_baseline_finding"], entry["scenario_id"]
-        assert result["lower_balance_system"] == entry["lower_balance_system"], entry["scenario_id"]
 
 
 # --- isolation -------------------------------------------------------------------

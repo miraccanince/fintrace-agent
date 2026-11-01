@@ -1,4 +1,4 @@
-"""The investigation agent: Gemini wired to the harness.
+"""The investigation agent: a local Ollama model wired to the harness.
 
 This module holds what is specific to talking to the model: the system prompt,
 turning the harness history into model messages, and turning the model's reply

@@ -6,8 +6,8 @@ final answer may claim, and which numbers go into the report. The model only
 proposes steps; `run_investigation` decides what happens with them.
 
 Inputs are two injected callables, so the same harness runs a scripted fake
-model in tests, Gemini in production, and an MCP client instead of the
-in-process tools in v0.8b:
+model in tests, a local model in production, and an MCP client instead of the
+in-process tools:
 
     generate_step(history, tools) -> step
     execute(tool_name, arguments) -> result dict

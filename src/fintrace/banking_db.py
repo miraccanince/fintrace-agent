@@ -19,7 +19,6 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-SYSTEMS = ("loan_system", "risk_system", "payment_gateway")
 
 _MONEY_FIELDS = ("original_principal", "outstanding_amount", "amount")
 
