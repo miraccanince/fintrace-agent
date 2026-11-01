@@ -210,6 +210,18 @@ def rate_limit(delay):
     return errors.ClientError(429, {"error": {"code": 429, "message": "slow", "status": "RESOURCE_EXHAUSTED", "details": details}})
 
 
+def test_agent_requests_carry_a_60_second_timeout_and_a_timeout_is_not_retried(fake_gemini):
+    import httpx
+
+    fake_gemini.outcomes = [httpx.ReadTimeout("timed out"), "reply"]
+
+    with pytest.raises(httpx.ReadTimeout):
+        call_adapter()
+
+    assert fake_gemini.config.http_options.timeout == 60_000
+    assert fake_gemini.calls == 1
+
+
 def test_transient_errors_are_retried_up_to_three_attempts(fake_gemini):
     fake_gemini.outcomes = [server_error(), rate_limit("0s"), "reply"]
 

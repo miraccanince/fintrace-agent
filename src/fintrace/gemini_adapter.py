@@ -13,6 +13,7 @@ load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..",
 MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
 MAX_ATTEMPTS = 3
 RETRY_DELAY_SECONDS = 5
+REQUEST_TIMEOUT_MS = 60_000  # a stalled agent request fails as a model error instead of hanging
 MAX_RETRY_DELAY_SECONDS = 60  # a 429 that asks for a longer wait is a quota, not a rate limit
 
 
@@ -89,6 +90,7 @@ def generate_with_tools(contents: list[dict], declarations: list[dict], system_i
             )
         ],
         automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+        http_options=types.HttpOptions(timeout=REQUEST_TIMEOUT_MS),
     )
     for attempt in range(MAX_ATTEMPTS):
         try:
