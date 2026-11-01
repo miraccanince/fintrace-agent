@@ -39,9 +39,14 @@ def db(tmp_path):
 
 
 def test_one_function_call_becomes_a_tool_call_step():
-    step = agent._to_step(reply(("get_loan", {"loan_id": "LN-1"}), text=None))
+    response = reply(("get_loan", {"loan_id": "LN-1"}), text=None)
 
-    assert step == {"type": "tool_call", "tool": "get_loan", "arguments": {"loan_id": "LN-1"}}
+    step = agent._to_step(response)
+
+    assert step == {
+        "type": "tool_call", "tool": "get_loan", "arguments": {"loan_id": "LN-1"},
+        "provider_content": response.candidates[0].content,
+    }
 
 
 def test_commentary_text_next_to_one_call_is_ignored():
@@ -300,3 +305,59 @@ def test_cli_fails_clearly_without_an_api_key_and_prints_no_secret(db, capsys, m
     assert code == 2 and captured.out == ""
     assert "GEMINI_API_KEY is not set" in captured.err
     assert "=" not in captured.err.split("GEMINI_API_KEY")[1]  # names the variable, shows no value
+
+
+# --- signed Gemini replies are replayed unchanged ---------------------------------------------
+
+
+def signed_reply(name, args, call_id, signature):
+    from google.genai import types
+
+    content = types.Content(
+        role="model",
+        parts=[types.Part(function_call=types.FunctionCall(name=name, args=args, id=call_id), thought_signature=signature)],
+    )
+    return SimpleNamespace(candidates=[SimpleNamespace(content=content)])
+
+
+def test_signed_function_call_is_replayed_with_its_signature_and_id_in_the_next_request(db):
+    loan_id = db["truth"]["S1"]["loan_id"]
+    answer = {"finding": "insufficient_evidence", "explanation": "x", "evidence_references": []}
+    first = signed_reply("get_loan", {"loan_id": loan_id}, "call-1", b"sig-1")
+
+    report, model = run(db, "S1", [first, reply(("submit_final_answer", answer))])
+
+    assert report["stop_reason"] == "final_answer"
+    replayed = model.seen[1]["contents"][1]
+    assert replayed is not first.candidates[0].content  # the harness deep-copies history
+    assert replayed == first.candidates[0].content
+    assert replayed.parts[0].thought_signature == b"sig-1"
+    assert replayed.parts[0].function_call.id == "call-1"
+    result = model.seen[1]["contents"][2]["parts"][0]["function_response"]
+    assert result["name"] == "get_loan" and result["id"] == "call-1"
+
+
+def test_each_signed_call_keeps_its_own_signature_across_several_requests(db):
+    loan_id = db["truth"]["S1"]["loan_id"]
+    answer = {"finding": "insufficient_evidence", "explanation": "x", "evidence_references": []}
+
+    _, model = run(db, "S1", [
+        signed_reply("get_loan", {"loan_id": loan_id}, "call-1", b"sig-1"),
+        signed_reply("compare_latest_snapshots", {"loan_id": loan_id}, "call-2", b"sig-2"),
+        reply(("submit_final_answer", answer)),
+    ])
+
+    contents = model.seen[2]["contents"]
+    assert [c.parts[0].thought_signature for c in (contents[1], contents[3])] == [b"sig-1", b"sig-2"]
+    assert [contents[i]["parts"][0]["function_response"]["id"] for i in (2, 4)] == ["call-1", "call-2"]
+
+
+def test_unsigned_history_without_provider_content_gets_no_invented_signature_or_id():
+    contents = agent._contents([
+        {"role": "task", "loan_id": "LN-1", "max_tool_calls": 8},
+        {"role": "tool_call", "tool": "get_loan", "arguments": {}},
+        {"role": "tool_result", "tool": "get_loan", "outcome": "ok", "content": {}, "remaining_tool_calls": 7},
+    ])
+
+    assert "thought_signature" not in contents[1]["parts"][0]
+    assert "id" not in contents[2]["parts"][0]["function_response"]

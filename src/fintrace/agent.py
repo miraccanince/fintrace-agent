@@ -57,20 +57,31 @@ FINAL_ANSWER_DECLARATION = {
 
 def _contents(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
     contents = []
+    call_id = None
     for message in history:
         if message["role"] == "task":
             text = f"Investigate loan {message['loan_id']}. You may make at most {message['max_tool_calls']} tool calls."
             contents.append({"role": "user", "parts": [{"text": text}]})
         elif message["role"] == "tool_call":
-            call = {"name": message["tool"], "args": message["arguments"] if isinstance(message["arguments"], dict) else {}}
-            contents.append({"role": "model", "parts": [{"function_call": call}]})
+            original = message.get("provider_content")
+            if original is not None:
+                # Replay the model's own reply untouched: Gemini needs its thought_signature and call id.
+                contents.append(original)
+                call_id = next((getattr(p.function_call, "id", None) for p in original.parts if getattr(p, "function_call", None)), None)
+            else:
+                call = {"name": message["tool"], "args": message["arguments"] if isinstance(message["arguments"], dict) else {}}
+                contents.append({"role": "model", "parts": [{"function_call": call}]})
+                call_id = None
         else:  # tool_result
             response = {
                 "outcome": message["outcome"],
                 "content": message["content"],
                 "remaining_tool_calls": message["remaining_tool_calls"],
             }
-            contents.append({"role": "user", "parts": [{"function_response": {"name": message["tool"], "response": response}}]})
+            function_response = {"name": message["tool"], "response": response}
+            if call_id:
+                function_response["id"] = call_id
+            contents.append({"role": "user", "parts": [{"function_response": function_response}]})
     return contents
 
 
@@ -90,7 +101,7 @@ def _to_step(response: Any) -> dict[str, Any]:
     arguments = dict(call.args or {})
     if call.name == FINAL_ANSWER_TOOL:
         return {**arguments, "type": "final"}  # "type" last, so the model cannot override it
-    return {"type": "tool_call", "tool": call.name, "arguments": arguments}
+    return {"type": "tool_call", "tool": call.name, "arguments": arguments, "provider_content": response.candidates[0].content}
 
 
 def make_generate_step(call_model: Callable[[list[dict], list[dict], str], Any]):

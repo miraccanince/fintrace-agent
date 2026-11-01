@@ -244,7 +244,10 @@ def run_investigation(
 
         agent_calls += 1
         arguments = step.get("arguments", {})
-        history.append({"role": "tool_call", "tool": step["tool"], "arguments": arguments})
+        call_entry = {"role": "tool_call", "tool": step["tool"], "arguments": arguments}
+        if "provider_content" in step:  # opaque to the harness; the agent layer replays it to the model unchanged
+            call_entry["provider_content"] = step["provider_content"]
+        history.append(call_entry)
         outcome, content = _call_tool(step["tool"], arguments, "agent", policy, advertised, execute, trace)
         history.append({
             "role": "tool_result", "tool": step["tool"], "outcome": outcome, "content": content,
